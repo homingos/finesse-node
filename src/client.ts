@@ -3,17 +3,24 @@ import { rawClient, type RawClient } from "./raw.js";
 import { Realtime } from "./realtime.js";
 import { Jobs } from "./resources/jobs.js";
 import { Speech } from "./resources/speech.js";
+import { Tokens } from "./resources/tokens.js";
 import { Voices } from "./resources/voices.js";
 
 interface FinesseResources {
   voices: Voices;
   jobs: Jobs;
   speech: Speech;
+  tokens: Tokens;
 }
 
 function resources(core: Core): FinesseResources {
   const jobs = new Jobs(core);
-  return { jobs, voices: new Voices(core, jobs), speech: new Speech(core) };
+  return {
+    jobs,
+    voices: new Voices(core, jobs),
+    speech: new Speech(core),
+    tokens: new Tokens(core),
+  };
 }
 
 /**
@@ -30,6 +37,7 @@ export class Finesse {
   readonly voices: Voices;
   readonly jobs: Jobs;
   readonly speech: Speech;
+  readonly tokens: Tokens;
   readonly realtime: Realtime;
   /** @internal */
   readonly _core: Core;
@@ -40,6 +48,7 @@ export class Finesse {
     this.jobs = r.jobs;
     this.voices = r.voices;
     this.speech = r.speech;
+    this.tokens = r.tokens;
     this.realtime = new Realtime(this._core);
   }
 

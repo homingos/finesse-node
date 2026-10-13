@@ -11,6 +11,9 @@ export {
   PaymentRequiredError,
   PermissionDeniedError,
   NotFoundError,
+  ConflictError,
+  PayloadTooLargeError,
+  UnprocessableEntityError,
   RateLimitError,
   InternalServerError,
   StreamError,
@@ -39,7 +42,9 @@ export type {
   UpdateVoiceParams,
   CloneVoiceParams,
   EnrollVoiceParams,
+  ConsentParams,
 } from "./resources/voices.js";
+export type { CreateTokenParams } from "./resources/tokens.js";
 export type { WaitOptions } from "./resources/jobs.js";
 export { SpeechStream } from "./resources/speech.js";
 export { isReady } from "./types.js";
@@ -48,6 +53,7 @@ export type {
   VoiceSettings,
   CloneJob,
   CloneResult,
+  AccessToken,
   Audio,
   AudioChunk,
   StreamDone,

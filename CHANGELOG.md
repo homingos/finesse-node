@@ -11,3 +11,16 @@
   a retry while the first attempt runs waits for it.
 - `client.withRawResponse`, `client.withOptions()`, `logLevel` / `FINESSE_LOG` logging, and
   `requestId` on errors.
+- `voices.clone`, `voices.enroll` and `voices.cloneAndWait` require `consent: true`: the
+  caller attests they are the speaker or hold their permission. The API rejects clones without
+  it.
+- Short-lived tokens: `client.tokens.create()` mints a single-use `fin_tok_` token.
+  `new Finesse({ accessToken })` uses one, and runs in a browser without
+  `dangerouslyAllowBrowser`; `realtime.connect({ accessToken, getAccessToken })` sends it as a
+  WebSocket subprotocol and fetches a fresh one for every reconnect.
+- Errors: `ConflictError` (409), `PayloadTooLargeError` (413) and `UnprocessableEntityError`
+  (422); `retryAfter` on every HTTP error; `code` documents the API's codes
+  (`insufficient_scope`, `key_expired`, `token_invalid`, `rate_limited`, `concurrency_limited`,
+  `upstream_busy`, ...).
+- Realtime: close reasons `upstream_busy`, `upstream_unavailable` and `upstream_error` surface
+  as retryable `RealtimeError` codes.

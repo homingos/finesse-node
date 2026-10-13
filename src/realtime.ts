@@ -12,20 +12,30 @@
  * ```
  *
  * In Node this needs the `ws` package (`npm i ws`), which sends the API key as a header. Bun's
- * built-in WebSocket does too. Deno and browsers cannot set handshake headers, so there the key
- * goes in the URL.
+ * built-in WebSocket does too.
+ *
+ * In a browser, never use the API key: mint a short-lived token on your server
+ * (`tokens.create`) and connect with `{ accessToken }` or `{ getAccessToken }`. The token rides
+ * in the WebSocket subprotocol list (`["finesse.v1", token]`), the one place a browser can put
+ * a credential on a handshake. (With a key, Deno and browsers fall back to a deprecated URL
+ * parameter.)
  */
 
 import { API_PREFIX, isBrowser, type Core } from "./core.js";
 import { APIConnectionError, APITimeoutError, FinesseError, makeStatusError } from "./errors.js";
 
 export const DEFAULT_OPEN_TIMEOUT_MS = 60_000;
+/** The protocol the service selects. A short-lived token travels as a second subprotocol. */
+export const SUBPROTOCOL = "finesse.v1";
 const CLOSE_TIMEOUT_MS = 5_000;
 
 // Going Away, abnormal closure, internal error, service restart, try again later, engine busy.
 const RETRYABLE_CLOSES = new Set([1001, 1006, 1011, 1012, 1013, 4429]);
 const RETRYABLE_CODES = new Set([
   "upstream_closed",
+  "upstream_error",
+  "upstream_busy",
+  "upstream_unavailable",
   "connection_lost",
   "service_busy",
   "stream_billing_error",
@@ -33,8 +43,11 @@ const RETRYABLE_CODES = new Set([
 
 /** A realtime context or session failed. */
 export class RealtimeError extends FinesseError {
-  /** `voice_not_found`, `insufficient_credits`, `upstream_closed`, `connection_lost`,
-   * `service_busy`, a `task_failed` code, ... */
+  /** Per context: `voice_not_found`, `voice_not_allowed` (the token is limited to other
+   * voices), `invalid_request` (a parameter out of range), a `task_failed` code. Whole session:
+   * `insufficient_credits`, `upstream_unavailable` (the engine could not be reached),
+   * `upstream_busy` (it is at capacity), `upstream_error`, `upstream_closed`,
+   * `connection_lost`, `token_spent`, ... */
   readonly code: string;
   /** The context it applies to, or `null` for the whole session. */
   readonly contextId: string | null;
@@ -66,7 +79,18 @@ function closeError(code: number | null, reason: string): RealtimeError | null {
   if (code === 1000) return null;
   if (code === 1008) return new RealtimeError(reason || "policy_violation", reason, c);
   if (code === 1009) return new RealtimeError("message_too_big", "A message was too large.", c);
+  // reason: upstream_error, upstream_closed or stream_billing_error
   if (code === 1011) return new RealtimeError(reason || "upstream_closed", reason, c);
+  if (code === 1013 && (reason === "upstream_busy" || reason === "upstream_unavailable")) {
+    return new RealtimeError(
+      reason,
+      reason === "upstream_busy"
+        ? "The synthesis service is at capacity."
+        : "The synthesis service could not be reached.",
+      c,
+    );
+  }
+  // 4401 / 4429 come only from older services; current ones map them to 1011 / 1013.
   if (code === 4401) {
     return new RealtimeError(
       "service_auth_failed",
@@ -167,9 +191,15 @@ export interface ContextOptions {
 export interface ConnectOptions {
   /** Reconnect on the next context after a retryable drop. Default true. */
   autoReconnect?: boolean;
-  /** Ms to open the socket. Default 60 000: the service connects to the engine first, which
-   * takes longer when the engine is cold. */
+  /** Ms to open the socket. Default 60 000. */
   openTimeout?: number;
+  /** A short-lived token (`fin_tok_...`) for this session instead of the API key (defaults to
+   * the client's `accessToken`). Single use: the handshake spends it, so pass
+   * `getAccessToken` too if the session should reconnect. */
+  accessToken?: string;
+  /** Returns a fresh token, e.g. from your own backend running `tokens.create`. Used for the
+   * first handshake when there is no `accessToken`, and for every reconnect. */
+  getAccessToken?: () => string | Promise<string>;
   /** A WebSocket implementation (defaults to the `ws` package in Node, the global elsewhere). */
   WebSocket?: unknown;
 }
@@ -346,8 +376,14 @@ type SocketCtor = new (url: string, protocols?: unknown, options?: unknown) => S
 const OPEN = 1;
 
 interface Dialer {
-  /** Open a socket; `headers` is null when the key must go in the URL instead. */
-  open(url: string, headers: Record<string, string> | null, timeoutMs: number): Socket;
+  /** Open a socket; `headers` is null when the key must go in the URL instead. `protocols` is
+   * set only for a token session. */
+  open(
+    url: string,
+    headers: Record<string, string> | null,
+    timeoutMs: number,
+    protocols?: string[],
+  ): Socket;
   headers: boolean;
 }
 
@@ -363,8 +399,10 @@ function globalDialer(headers: boolean): Dialer {
   if (!G) throw new FinesseError("No WebSocket implementation available.");
   return {
     headers,
-    // Bun's WebSocket takes headers as a second-argument option.
-    open: (url, h) => (h ? new G(url, { headers: h }) : new G(url)),
+    // Bun's WebSocket takes headers as a second-argument option. A token session needs no
+    // headers, so it can use the standard protocols argument everywhere.
+    open: (url, h, _t, protocols) =>
+      protocols ? new G(url, protocols) : h ? new G(url, { headers: h }) : new G(url),
   };
 }
 
@@ -386,8 +424,8 @@ async function defaultDialer(): Promise<Dialer> {
   const WS = (mod.default ?? mod.WebSocket) as SocketCtor;
   return {
     headers: true,
-    open: (url, h, timeoutMs) =>
-      new WS(url, undefined, { headers: h, handshakeTimeout: timeoutMs }),
+    open: (url, h, timeoutMs, protocols) =>
+      new WS(url, protocols, { headers: h, handshakeTimeout: timeoutMs }),
   };
 }
 
@@ -406,11 +444,15 @@ export class RealtimeSession {
   private openedOnce = false;
   private closed = false;
   private closedWaiters: (() => void)[] = [];
+  private readonly staticToken: string | null;
+  private tokenSpent = false;
 
   constructor(
     private readonly core: Core,
     private readonly options: ConnectOptions = {},
-  ) {}
+  ) {
+    this.staticToken = options.accessToken ?? core.accessToken;
+  }
 
   get url(): string {
     return `${this.core.wsBaseURL}${API_PREFIX}/stream`;
@@ -517,30 +559,68 @@ export class RealtimeSession {
     if (this.contexts.get(ctx.id) === ctx) this.contexts.delete(ctx.id);
   }
 
+  /** The token for the next handshake, or `null` to use the API key. A static token is used
+   * first; once a handshake has spent it, `getAccessToken` supplies one per reconnect. */
+  private async nextToken(): Promise<string | null> {
+    if (this.staticToken && !this.tokenSpent) return this.staticToken;
+    if (this.options.getAccessToken) {
+      const token = await this.options.getAccessToken();
+      if (typeof token !== "string" || !token) {
+        throw new FinesseError("getAccessToken must return a non-empty token string.");
+      }
+      return token;
+    }
+    if (this.staticToken) {
+      throw new RealtimeError(
+        "token_spent",
+        "This session's access token was used by an earlier connection. Pass " +
+          "{ getAccessToken } so a reconnect can fetch a fresh one.",
+      );
+    }
+    return null;
+  }
+
   private async dial(): Promise<void> {
     const timeout = this.options.openTimeout ?? DEFAULT_OPEN_TIMEOUT_MS;
     const custom = this.options.WebSocket as SocketCtor | undefined;
     const dialer: Dialer = custom
       ? {
           headers: !isBrowser(),
-          open: (url, h, t) =>
-            h ? new custom(url, undefined, { headers: h, handshakeTimeout: t }) : new custom(url),
+          open: (url, h, t, protocols) =>
+            h
+              ? new custom(url, protocols, { headers: h, handshakeTimeout: t })
+              : new custom(url, protocols),
         }
       : await defaultDialer();
+    const token = await this.nextToken();
+    // Offered only with a token: a server that predates tokens selects no subprotocol, which
+    // the `ws` package treats as a failed handshake.
+    const protocols = token ? [SUBPROTOCOL, token] : undefined;
     let url = this.url;
     let headers: Record<string, string> | null = null;
-    if (dialer.headers) {
+    if (token) {
+      // The token replaces the key; it rides in the subprotocol list, never in a header or URL.
+      if (dialer.headers) {
+        headers = { ...this.core.headers };
+        delete headers.Accept;
+        delete headers["X-API-Key"];
+        delete headers.Authorization;
+      }
+      const u = new URL(url);
+      u.searchParams.set("client", this.core.headers["X-Finesse-Client"] ?? "");
+      url = u.toString();
+    } else if (dialer.headers) {
       headers = { ...this.core.headers };
       delete headers.Accept;
     } else {
       // No handshake headers here (browsers, Deno): the service also accepts the key and
       // the client name as query parameters.
       const u = new URL(url);
-      u.searchParams.set("api_key", this.core.apiKey);
+      u.searchParams.set("api_key", this.core.apiKey ?? "");
       u.searchParams.set("client", this.core.headers["X-Finesse-Client"] ?? "");
       url = u.toString();
     }
-    const ws = dialer.open(url, headers, timeout);
+    const ws = dialer.open(url, headers, timeout, protocols);
     ws.binaryType = "arraybuffer";
 
     await new Promise<void>((resolve, reject) => {
@@ -583,6 +663,7 @@ export class RealtimeSession {
       ws.close(1000);
       throw new RealtimeError("session_closed", "This session was closed.");
     }
+    if (token && token === this.staticToken) this.tokenSpent = true; // the handshake spent it
     this.ws = ws;
     this.pendingAudio = null;
     this.fatal = null;

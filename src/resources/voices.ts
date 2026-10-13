@@ -1,4 +1,5 @@
 import { pathId, type Core, type RequestOptions } from "../core.js";
+import { FinesseError } from "../errors.js";
 import { toBlob, type FileInput } from "../files.js";
 import { toVoice, type CloneResult, type Voice } from "../types.js";
 import { Jobs, type WaitOptions } from "./jobs.js";
@@ -26,9 +27,15 @@ export interface UpdateVoiceParams {
   labels?: Record<string, string>;
 }
 
-export interface CloneVoiceParams {
+/** Cloning requires `consent: true`: you attest that you are the speaker or hold their explicit
+ * permission to clone their voice. The attestation is recorded on the voice. */
+export interface ConsentParams {
+  consent: true;
+}
+
+export interface CloneVoiceParams extends ConsentParams {
   name: string;
-  /** Reference clip, at most 20 MiB. */
+  /** Reference clip, at most 20 MiB; 10-30 s of clear speech works best. */
   file: FileInput;
   description?: string;
   language?: string;
@@ -38,7 +45,7 @@ export interface CloneVoiceParams {
   remove_background_noise?: boolean;
 }
 
-export interface EnrollVoiceParams {
+export interface EnrollVoiceParams extends ConsentParams {
   file: FileInput;
   ref_text?: string;
   language?: string;
@@ -80,6 +87,16 @@ export class VoicePage implements AsyncIterable<Voice> {
   async *[Symbol.asyncIterator](): AsyncIterator<Voice> {
     for await (const page of this.iterPages()) yield* page.voices;
   }
+}
+
+function consent(params: { consent?: unknown }): string {
+  if (params.consent !== true) {
+    throw new FinesseError(
+      "Cloning requires consent: true: you attest that you are the speaker or hold their " +
+        "explicit permission to clone their voice.",
+    );
+  }
+  return "true";
 }
 
 function defined<T extends Record<string, unknown>>(obj: T): Partial<T> {
@@ -180,9 +197,10 @@ export class Voices {
   }
 
   /** Create a voice from a reference clip. Returns at once with the voice in `processing` and a
-   * `job_id`; see {@link waitUntilReady} or {@link cloneAndWait}. */
+   * `job_id`; see {@link waitUntilReady} or {@link cloneAndWait}. Requires `consent: true`. */
   async clone(params: CloneVoiceParams, options: RequestOptions = {}): Promise<CloneResult> {
     const fields = {
+      consent: consent(params),
       name: params.name,
       description: params.description,
       language: params.language,
@@ -201,13 +219,18 @@ export class Voices {
     return { ...result, voice: toVoice(result.voice) };
   }
 
-  /** Clone a reference clip into an existing voice of yours. Returns at once. */
+  /** Clone a reference clip into an existing voice of yours. Returns at once. Requires
+   * `consent: true`. */
   async enroll(
     voiceId: string,
     params: EnrollVoiceParams,
     options: RequestOptions = {},
   ): Promise<CloneResult> {
-    const fields = { ref_text: params.ref_text, language: params.language };
+    const fields = {
+      consent: consent(params),
+      ref_text: params.ref_text,
+      language: params.language,
+    };
     const result = await this.core.json<CloneResult>("POST", `/voices/${pathId(voiceId)}/enroll`, {
       ...options,
       idempotent: true,

@@ -319,6 +319,15 @@ describe("realtime", () => {
       "upstream_closed",
       true,
     ],
+    [
+      { code: "upstream_unavailable", message: "unreachable", fatal: true },
+      1013,
+      "upstream_unavailable",
+      "upstream_unavailable",
+      true,
+    ],
+    [null, 1013, "upstream_busy", "upstream_busy", true],
+    [null, 1011, "upstream_error", "upstream_error", true],
     [null, 4429, "too many", "service_busy", true],
     [null, 4401, "bad key", "service_auth_failed", false],
     [null, 1011, "", "upstream_closed", true],
@@ -354,6 +363,75 @@ describe("realtime", () => {
       );
     });
     expect(engine.connections).toBe(2);
+  });
+
+  it("sends a token in the subprotocol list, not a header or the URL", async () => {
+    const engine = new Engine();
+    const keyed = await start(engine);
+    const client = new ff.Finesse({ accessToken: "fin_tok_abc", baseURL: keyed.baseURL });
+    await session(client, async (rt) => {
+      await collect(rt.say({ voice_id: VID, text: "hi" }));
+    });
+    const req = engine.requests[0]!;
+    expect(protocols(req)).toEqual(["finesse.v1", "fin_tok_abc"]);
+    expect(req.headers["x-api-key"]).toBeUndefined();
+    expect(req.headers.authorization).toBeUndefined();
+    expect(String(req.url)).not.toContain("fin_tok_abc");
+  });
+
+  it("offers no subprotocol on a key session", async () => {
+    const engine = new Engine();
+    const client = await start(engine);
+    await session(client, async (rt) => {
+      await collect(rt.say({ voice_id: VID, text: "hi" }));
+    });
+    expect(engine.requests[0]!.headers["sec-websocket-protocol"]).toBeUndefined();
+  });
+
+  const protocols = (req: { headers: Record<string, unknown> }) =>
+    String(req.headers["sec-websocket-protocol"] ?? "")
+      .split(",")
+      .map((p) => p.trim());
+
+  function dropFirstTask(engine: Engine) {
+    let first = true;
+    engine.onMessage = (ws, msg, e) => {
+      if (first && msg.type === "task_start") {
+        first = false;
+        ws.terminate();
+        return;
+      }
+      return defaultHandler(ws, msg, e);
+    };
+  }
+
+  it("refuses to reconnect with a spent token", async () => {
+    const engine = new Engine();
+    dropFirstTask(engine);
+    const keyed = await start(engine);
+    const client = new ff.Finesse({ accessToken: "fin_tok_1", baseURL: keyed.baseURL });
+    const rt = await client.realtime.connect();
+    await collect(rt.say({ voice_id: VID, text: "x" })).catch(() => undefined);
+    const e = await collect(rt.say({ voice_id: VID, text: "again" })).catch((x) => x);
+    expect(e.code).toBe("token_spent");
+    expect(engine.connections).toBe(1);
+    await rt.close();
+  });
+
+  it("uses the static token first, then getAccessToken for each reconnect", async () => {
+    const engine = new Engine();
+    dropFirstTask(engine);
+    const keyed = await start(engine);
+    const client = new ff.Finesse({ accessToken: "fin_tok_first", baseURL: keyed.baseURL });
+    let n = 0;
+    const rt = await client.realtime.connect({ getAccessToken: async () => `fin_tok_fresh${n++}` });
+    await collect(rt.say({ voice_id: VID, text: "x" })).catch(() => undefined);
+    expect((await collect(rt.say({ voice_id: VID, text: "again" }))).at(-1).type).toBe("task_done");
+    await rt.close();
+    expect(engine.requests.map(protocols)).toEqual([
+      ["finesse.v1", "fin_tok_first"],
+      ["finesse.v1", "fin_tok_fresh0"],
+    ]);
   });
 
   it("does not reconnect when disabled", async () => {

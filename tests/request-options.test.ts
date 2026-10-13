@@ -68,8 +68,8 @@ describe("per-call options", () => {
     await m.client.voices.create({ name: "n" }, o);
     await m.client.voices.update(VOICE.id, { name: "m" }, o);
     await m.client.voices.delete(VOICE.id, o);
-    await m.client.voices.clone({ name: "a", file: new Uint8Array([1]) }, o);
-    await m.client.voices.enroll(VOICE.id, { file: new Uint8Array([1]) }, o);
+    await m.client.voices.clone({ consent: true, name: "a", file: new Uint8Array([1]) }, o);
+    await m.client.voices.enroll(VOICE.id, { consent: true, file: new Uint8Array([1]) }, o);
     await m.client.jobs.get("j", o);
     await m.client.speech.create({ voice_id: VOICE.id, text: "hi" }, o);
     await m.client.speech.stream({ voice_id: VOICE.id, text: "hi" }, o).readAll();

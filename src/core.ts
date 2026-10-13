@@ -20,8 +20,12 @@ const MAX_BACKOFF_MS = 8_000;
 export type Fetch = typeof globalThis.fetch;
 
 export interface ClientOptions {
-  /** Workspace API key (`flv_...`). Defaults to `FINESSE_API_KEY`. */
+  /** Workspace API key (`flv_...`). Defaults to `FINESSE_API_KEY`. Keep it on your server. */
   apiKey?: string;
+  /** A short-lived token (`fin_tok_...`) from `tokens.create`, instead of an API key. It is
+   * safe in a browser: it carries the `tts` scope only and is good for one `speech.create` /
+   * `speech.stream` call or one realtime session. Sent as `Authorization: Bearer`. */
+  accessToken?: string;
   /** API host. Defaults to `FINESSE_BASE_URL`, then production. */
   baseURL?: string;
   /** Per-request timeout in ms. Default 120 000. */
@@ -34,8 +38,8 @@ export interface ClientOptions {
   defaultHeaders?: Record<string, string>;
   /** A custom `fetch` (proxies, tests). */
   fetch?: Fetch;
-  /** Allow running in a browser. Your API key would be visible to anyone using the page, so
-   * only do this for internal tools. */
+  /** Allow an API key in a browser. The key would be visible to anyone using the page, so
+   * only do this for internal tools; otherwise use an `accessToken`. */
   dangerouslyAllowBrowser?: boolean;
   /** Log requests and retries: `"debug"`, `"info"` or `"off"`. Defaults to `FINESSE_LOG`, then
    * `"off"`. The API key, bodies and audio are never logged. */
@@ -85,7 +89,8 @@ export function isBrowser(): boolean {
 }
 
 export class Core {
-  readonly apiKey: string;
+  readonly apiKey: string | null;
+  readonly accessToken: string | null;
   readonly baseURL: string;
   readonly timeout: number;
   readonly maxRetries: number;
@@ -99,19 +104,26 @@ export class Core {
   onResponse: ((response: Response) => void) | null = null;
 
   constructor(options: ClientOptions = {}) {
-    const apiKey = options.apiKey ?? env("FINESSE_API_KEY");
-    if (!apiKey) {
+    if (options.apiKey && options.accessToken) {
+      throw new FinesseError("Pass { apiKey } or { accessToken }, not both.");
+    }
+    const accessToken = options.accessToken || null;
+    const apiKey = accessToken ? null : (options.apiKey ?? env("FINESSE_API_KEY") ?? null);
+    if (!accessToken && !apiKey) {
       throw new FinesseError(
-        "No API key. Pass { apiKey } or set the FINESSE_API_KEY environment variable.",
+        "No API key. Pass { apiKey } or set the FINESSE_API_KEY environment variable " +
+          "(or pass { accessToken } for a short-lived token).",
       );
     }
-    if (isBrowser() && !options.dangerouslyAllowBrowser) {
+    if (apiKey && isBrowser() && !options.dangerouslyAllowBrowser) {
       throw new FinesseError(
-        "Running in a browser would expose your API key. Call Finesse from your server, or " +
-          "pass { dangerouslyAllowBrowser: true } for internal tools.",
+        "Running in a browser would expose your API key. Mint a short-lived token on your " +
+          "server (tokens.create) and pass { accessToken }, or pass " +
+          "{ dangerouslyAllowBrowser: true } for internal tools.",
       );
     }
     this.apiKey = apiKey;
+    this.accessToken = accessToken;
     this.baseURL = (options.baseURL || env("FINESSE_BASE_URL") || DEFAULT_BASE_URL).replace(
       /\/+$/,
       "",
@@ -119,7 +131,7 @@ export class Core {
     this.timeout = options.timeout ?? DEFAULT_TIMEOUT_MS;
     this.maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
     this.headers = {
-      "X-API-Key": apiKey,
+      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : { "X-API-Key": apiKey! }),
       "X-Finesse-Client": CLIENT_NAME,
       Accept: "application/json",
       ...(isBrowser() ? {} : { "User-Agent": CLIENT_NAME }),

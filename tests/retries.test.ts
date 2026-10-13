@@ -148,7 +148,11 @@ describe("retries", () => {
 
   it("re-sends the same upload on retry", async () => {
     const m = mock(error(503, "busy"), envelope({ voice: VOICE, job_id: "j".repeat(24) }, 202));
-    await m.client.voices.clone({ name: "a", file: new TextEncoder().encode("RIFFdata") });
+    await m.client.voices.clone({
+      consent: true,
+      name: "a",
+      file: new TextEncoder().encode("RIFFdata"),
+    });
     for (const r of m.requests) {
       const file = (r.body as FormData).get("file") as Blob;
       expect(await file.text()).toBe("RIFFdata");

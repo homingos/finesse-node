@@ -69,6 +69,7 @@ describe("voices", () => {
   it("clones with a multipart form", async () => {
     const m = mock(envelope({ voice: { ...VOICE, status: "processing" }, job_id: JOB_ID }, 202));
     const res = await m.client.voices.clone({
+      consent: true,
       name: "Ana",
       file: { data: new TextEncoder().encode("RIFFbytes"), filename: "ref.wav" },
       labels: { accent: "british" },
@@ -98,14 +99,18 @@ describe("voices", () => {
     const path = join(dir, "me.mp3");
     await writeFile(path, "ID3x");
     const m = mock(envelope({ voice: VOICE, job_id: JOB_ID }, 202));
-    await m.client.voices.clone({ name: "a", file: await ff.fileFromPath(path) });
+    await m.client.voices.clone({ consent: true, name: "a", file: await ff.fileFromPath(path) });
     const file = (m.last().body as FormData).get("file") as File;
     expect([file.name, file.type, await file.text()]).toEqual(["me.mp3", "audio/mpeg", "ID3x"]);
   });
 
   it("enrolls", async () => {
     const m = mock(envelope({ voice: VOICE, job_id: JOB_ID }, 202));
-    await m.client.voices.enroll(VOICE.id, { file: new Blob(["x"]), language: "hi" });
+    await m.client.voices.enroll(VOICE.id, {
+      consent: true,
+      file: new Blob(["x"]),
+      language: "hi",
+    });
     expect(m.last().url.pathname.endsWith(`/voices/${VOICE.id}/enroll`)).toBe(true);
     expect((m.last().body as FormData).get("language")).toBe("hi");
   });
@@ -119,7 +124,7 @@ describe("voices", () => {
       envelope(VOICE),
     );
     const v = await m.client.voices.cloneAndWait(
-      { name: "Ana", file: new Uint8Array([1]) },
+      { consent: true, name: "Ana", file: new Uint8Array([1]) },
       { pollInterval: 0, onUpdate: (j) => seen.push(j.status) },
     );
     expect(v.status).toBe("ready");
@@ -141,7 +146,11 @@ describe("voices", () => {
 describe("files", () => {
   it("gives an untyped Blob the type guessed from its filename", async () => {
     const m = mock(envelope({ voice: VOICE, job_id: JOB_ID }, 202));
-    await m.client.voices.clone({ name: "a", file: { data: new Blob(["x"]), filename: "a.mp3" } });
+    await m.client.voices.clone({
+      consent: true,
+      name: "a",
+      file: { data: new Blob(["x"]), filename: "a.mp3" },
+    });
     expect(((m.last().body as FormData).get("file") as Blob).type).toBe("audio/mpeg");
   });
 });

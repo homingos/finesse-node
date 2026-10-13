@@ -37,6 +37,7 @@ and stream it in realtime to voice agents, with a few lines of code.
 - [Text to speech](#text-to-speech)
 - [Streaming speech](#streaming-speech)
 - [Realtime](#realtime)
+- [Browsers and short-lived tokens](#browsers-and-short-lived-tokens)
 - [Which method should I use?](#which-method-should-i-use)
 - [Audio formats](#audio-formats)
 - [Handling errors](#handling-errors)
@@ -135,8 +136,10 @@ Request and response fields use the API's own names (`voice_id`, `output_format`
 
 ## Clone a voice
 
-Upload a clean reference clip (a few seconds to a minute of one speaker, at most 20 MiB) and wait
-for the voice to be ready:
+Upload a clean reference clip of one speaker (10-30 seconds of clear speech works best; at least
+10 seconds, at most 20 MiB) and wait for the voice to be ready. Cloning requires
+`consent: true`: you attest that you are the speaker or hold their explicit permission to clone
+their voice, and the attestation is recorded on the voice.
 
 ```ts
 import { fileFromPath } from "@flam/finesse";
@@ -145,6 +148,7 @@ const voice = await client.voices.cloneAndWait(
   {
     name: "Ana",
     file: await fileFromPath("reference.wav"), // or a Blob/File, bytes, or { data, filename }
+    consent: true,
     language: "en",
     labels: { gender: "female", accent: "british" },
     ref_text: "What the speaker says in the clip, if you have it.",
@@ -158,14 +162,18 @@ The first clone after the cloner has been idle can take a couple of minutes. To 
 now and wait later:
 
 ```ts
-const clone = await client.voices.clone({ name: "Ana", file: await fileFromPath("reference.wav") });
+const clone = await client.voices.clone({
+  name: "Ana",
+  file: await fileFromPath("reference.wav"),
+  consent: true,
+});
 console.log(clone.voice.status, clone.job_id); // "processing", "6660aa00..."
 const ready = await client.voices.waitUntilReady(clone, { timeout: 300_000 });
 ```
 
 Cloning throws `CloneFailedError` if the job fails and `CloneTimeoutError` if it doesn't finish
 in time. To add a clip to a voice you already created, use
-`client.voices.enroll(voiceId, { file })`.
+`client.voices.enroll(voiceId, { file, consent: true })`.
 
 ## Text to speech
 
@@ -270,13 +278,45 @@ A turn that fails throws `RealtimeError` (for example `code === "voice_not_found
 
 ### Limits and reconnects
 
-- A session runs up to 4 contexts at once, and a workspace can hold 4 sessions. A fifth session
-  throws `RateLimitError` with `code === "too_many_sessions"`, so reuse a session.
+- A session runs up to 4 contexts at once, and holds one of your plan's concurrent-synthesis
+  slots until it closes. Opening one more than the plan allows throws `RateLimitError` with
+  `code === "concurrency_limited"` (wait `error.retryAfter` seconds), so reuse a session.
 - If the connection drops, running contexts throw `RealtimeError`. Check `error.retryable`. The
   next context reconnects automatically (turn this off with `connect({ autoReconnect: false })`).
 - Running out of credits ends the session with `RealtimeError` (`code === "insufficient_credits"`).
 - Text is billed per character as it is sent. A session reserves credits in blocks of up to
   1,000 characters and returns what it doesn't use when it ends.
+
+## Browsers and short-lived tokens
+
+Never ship an API key to a browser. Your server mints a short-lived, single-use token with a key
+that has the `tts` scope, and returns only the token:
+
+```ts
+// On your server
+const { token } = await client.tokens.create({ ttl_seconds: 60, voice_ids: [voiceId] });
+```
+
+In the browser, the client runs without `dangerouslyAllowBrowser` when it holds a token:
+
+```ts
+const getToken = async () => (await (await fetch("/api/finesse-token")).json()).token;
+
+// One-shot speech: sent as "Authorization: Bearer fin_tok_..."
+const tts = new Finesse({ accessToken: await getToken() });
+const audio = await tts.speech.create({ voice_id: voiceId, text: "Hi!" });
+
+// Realtime: the token rides in the WebSocket subprotocol list. A token is spent by the
+// handshake that uses it, so pass getAccessToken for reconnects to fetch a fresh one.
+const live = new Finesse({ accessToken: await getToken() });
+const rt = await live.realtime.connect({ getAccessToken: getToken });
+```
+
+A token carries the `tts` scope only, works for one `speech.create` / `speech.stream` call or one
+realtime session, and dies when the key that minted it is revoked or expires. A request refused
+before it runs (a `429`, a plan check) keeps its token, so you can retry with it. A spent,
+expired or unknown token throws `AuthenticationError` with `code === "token_invalid"`; a voice
+outside `voice_ids` throws `PermissionDeniedError` with `code === "voice_not_allowed"`.
 
 ## Which method should I use?
 
@@ -325,19 +365,22 @@ try {
 }
 ```
 
-| Error                                   | Status | When                                                           |
-| --------------------------------------- | ------ | -------------------------------------------------------------- |
-| `BadRequestError`                       | 400    | Invalid input, text over 10,000 characters, voice not enrolled |
-| `AuthenticationError`                   | 401    | Missing, unknown or revoked API key                            |
-| `PaymentRequiredError`                  | 402    | `insufficient_credits` or `quota_exhausted`                    |
-| `PermissionDeniedError`                 | 403    | `feature_disabled`, or `plan_limit_reached` (see `.feature`)   |
-| `NotFoundError`                         | 404    | No such voice or job, or not visible to your workspace         |
-| `RateLimitError`                        | 429    | Rate limited, or too many realtime sessions                    |
-| `InternalServerError`                   | 5xx    | A server or engine error                                       |
-| `APIConnectionError`                    |        | No response; `APITimeoutError` when it timed out               |
-| `StreamError`                           |        | A speech stream failed after it started                        |
-| `RealtimeError`                         |        | A realtime context or session failed                           |
-| `CloneFailedError`, `CloneTimeoutError` |        | Waiting for a clone                                            |
+| Error                                   | Status | When                                                                                                            |
+| --------------------------------------- | ------ | --------------------------------------------------------------------------------------------------------------- |
+| `BadRequestError`                       | 400    | Invalid input, text over 10,000 characters, voice not enrolled                                                  |
+| `AuthenticationError`                   | 401    | Missing, unknown or revoked key; `key_expired`; `token_invalid`                                                 |
+| `PaymentRequiredError`                  | 402    | `insufficient_credits` or `quota_exhausted`                                                                     |
+| `PermissionDeniedError`                 | 403    | `insufficient_scope`, `voice_not_allowed` (token), `feature_disabled`, or `plan_limit_reached` (see `.feature`) |
+| `NotFoundError`                         | 404    | No such voice or job, or not visible to your workspace                                                          |
+| `ConflictError`                         | 409    | A request with the same `Idempotency-Key` is still running                                                      |
+| `PayloadTooLargeError`                  | 413    | Request body over 21 MiB                                                                                        |
+| `UnprocessableEntityError`              | 422    | `invalid_input`, or `idempotency_key_reused`                                                                    |
+| `RateLimitError`                        | 429    | `rate_limited` / `concurrency_limited` (see `retryAfter`), or `too_many_sessions`                               |
+| `InternalServerError`                   | 5xx    | `upstream_error` (502) or `upstream_busy` (503, see `retryAfter`): retry                                        |
+| `APIConnectionError`                    |        | No response; `APITimeoutError` when it timed out                                                                |
+| `StreamError`                           |        | A speech stream failed after it started                                                                         |
+| `RealtimeError`                         |        | A realtime context or session failed                                                                            |
+| `CloneFailedError`, `CloneTimeoutError` |        | Waiting for a clone                                                                                             |
 
 ## Retries
 
@@ -453,17 +496,18 @@ const client = new Finesse({ baseURL: "https://fi.development.flamapis.com" });
 
 ### Configuration
 
-| Option                    | Environment variable | Default                              |
-| ------------------------- | -------------------- | ------------------------------------ |
-| `apiKey`                  | `FINESSE_API_KEY`    | required                             |
-| `baseURL`                 | `FINESSE_BASE_URL`   | `https://fi.production.flamapis.com` |
-| `timeout`                 |                      | 120 000 ms                           |
-| `maxRetries`              |                      | 2                                    |
-| `defaultHeaders`          |                      | none                                 |
-| `fetch`                   |                      | the global `fetch`                   |
-| `dangerouslyAllowBrowser` |                      | `false`                              |
-| `logLevel`                | `FINESSE_LOG`        | `"off"`                              |
-| `logger`                  |                      | `console`                            |
+| Option                    | Environment variable | Default                               |
+| ------------------------- | -------------------- | ------------------------------------- |
+| `apiKey`                  | `FINESSE_API_KEY`    | required, unless `accessToken`        |
+| `accessToken`             |                      | none (a short-lived `fin_tok_` token) |
+| `baseURL`                 | `FINESSE_BASE_URL`   | `https://fi.production.flamapis.com`  |
+| `timeout`                 |                      | 120 000 ms                            |
+| `maxRetries`              |                      | 2                                     |
+| `defaultHeaders`          |                      | none                                  |
+| `fetch`                   |                      | the global `fetch`                    |
+| `dangerouslyAllowBrowser` |                      | `false`                               |
+| `logLevel`                | `FINESSE_LOG`        | `"off"`                               |
+| `logger`                  |                      | `console`                             |
 
 ### Custom fetch
 
@@ -484,16 +528,17 @@ const client = new Finesse({ defaultHeaders: { "X-Finesse-Client": "my-app/1.0.0
 
 ## Runtimes
 
-| Runtime  | HTTP               | Realtime                                           |
-| -------- | ------------------ | -------------------------------------------------- |
-| Node 18+ | built-in `fetch`   | needs `ws`; the API key goes in a header           |
-| Bun      | built-in           | built-in `WebSocket`; the API key goes in a header |
-| Deno     | built-in           | built-in `WebSocket`; the API key goes in the URL  |
-| Browsers | refused by default |                                                    |
+| Runtime  | HTTP               | Realtime                                                  |
+| -------- | ------------------ | --------------------------------------------------------- |
+| Node 18+ | built-in `fetch`   | needs `ws`; the API key goes in a header                  |
+| Bun      | built-in           | built-in `WebSocket`; the API key goes in a header        |
+| Deno     | built-in           | built-in `WebSocket`; use a token (a key goes in the URL) |
+| Browsers | with `accessToken` | built-in `WebSocket`; the token is a subprotocol          |
 
-Browsers can't keep an API key secret, so the client refuses to run in one. Call Finesse from
-your server. For internal tools only, `new Finesse({ dangerouslyAllowBrowser: true })` lifts
-this; realtime then sends the key in the URL, because browsers can't set WebSocket headers.
+Browsers can't keep an API key secret, so a client holding a key refuses to run in one. Use a
+[short-lived token](#browsers-and-short-lived-tokens) instead. For internal tools only,
+`new Finesse({ dangerouslyAllowBrowser: true })` lifts this; realtime then sends the key in a
+deprecated URL parameter, because browsers can't set WebSocket headers.
 
 ## Examples
 

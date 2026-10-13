@@ -84,15 +84,54 @@ describe.runIf(enabled)("live", { timeout: 180_000 }, () => {
     }
   });
 
-  // The cap is 4 sessions per workspace per pod; this assumes one pod (true on dev today).
+  // Each session holds one of the plan's concurrency slots (2 on free); the service also caps a
+  // workspace at 4 sessions per pod. Whichever comes first refuses the next handshake.
   it("caps concurrent sessions", async () => {
-    const sessions = await Promise.all([1, 2, 3, 4].map(() => client.realtime.connect()));
+    const sessions: ff.RealtimeSession[] = [];
     try {
-      const e = await client.realtime.connect().catch((x) => x);
+      let e: unknown = null;
+      for (let i = 0; i < 5 && !e; i++) {
+        try {
+          sessions.push(await client.realtime.connect());
+        } catch (err) {
+          e = err;
+        }
+      }
       expect(e).toBeInstanceOf(ff.RateLimitError);
-      expect(e.code).toBe("too_many_sessions");
+      expect(["concurrency_limited", "too_many_sessions"]).toContain((e as ff.RateLimitError).code);
+      expect(sessions.length).toBeGreaterThan(0);
     } finally {
       await Promise.all(sessions.map((s) => s.close()));
+    }
+  });
+
+  it("refuses to clone without consent, locally", async () => {
+    const bad = { consent: false } as unknown as { consent: true };
+    await expect(
+      client.voices.clone({ ...bad, name: "never sent", file: new Uint8Array(1) }),
+    ).rejects.toThrow(/consent: true/);
+  });
+
+  it("speaks once with a token, then refuses it", async () => {
+    const { token } = await client.tokens.create({ ttl_seconds: 60, voice_ids: [voice.id] });
+    const tc = new ff.Finesse({ accessToken: token });
+    const audio = await tc.speech.create({ voice_id: voice.id, text: "Token check." });
+    expect(audio.data.byteLength).toBeGreaterThan(44);
+    const e = await tc.speech.create({ voice_id: voice.id, text: "Again." }).catch((x) => x);
+    expect(e).toBeInstanceOf(ff.AuthenticationError);
+    expect(e.code).toBe("token_invalid");
+  });
+
+  it("runs a realtime session on tokens", async () => {
+    const fresh = async () => (await client.tokens.create({ voice_ids: [voice.id] })).token;
+    const live = new ff.Finesse({ accessToken: await fresh() });
+    const rt = await live.realtime.connect({ getAccessToken: fresh });
+    try {
+      const events = [];
+      for await (const e of rt.say({ voice_id: voice.id, text: "Token realtime." })) events.push(e);
+      expect(events.at(-1)?.type).toBe("task_done");
+    } finally {
+      await rt.close();
     }
   });
 });

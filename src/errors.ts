@@ -31,15 +31,19 @@ export class APITimeoutError extends APIConnectionError {
 /**
  * The API answered with a 4xx or 5xx status. The API's three error body shapes are normalised:
  *
- * - `{"status": 404, "error": true, "message": "Voice not found"}`
+ * - `{"status": 404, "error": true, "message": "Voice not found", "code": "not_found"}`
  * - `{"error": "insufficient_credits", "unit": "character", "limit": 100, "used": 100}`
  * - `{"error": "plan limit reached", "feature": "max_voices", "limit": 3}`
  */
 export class APIStatusError extends FinesseError {
   /** HTTP status. */
   readonly status: number;
-  /** Machine-readable code when the API sends one (`insufficient_credits`, `quota_exhausted`,
-   * `feature_disabled`, `plan_limit_reached`, `too_many_sessions`), else `null`. */
+  /** Machine-readable code. Branch on this, never on the message. Envelope codes:
+   * `invalid_request`, `unauthorized`, `key_expired`, `token_invalid`, `insufficient_scope`,
+   * `voice_not_allowed`, `not_found`, `payload_too_large`, `invalid_input`, `rate_limited`,
+   * `concurrency_limited`, `upstream_error`, `upstream_busy`, ...; plan denials:
+   * `insufficient_credits`, `quota_exhausted`, `feature_disabled`, `plan_limit_reached`;
+   * realtime: `too_many_sessions`. `null` when absent. */
   readonly code: string | null;
   /** The decoded JSON body, or the raw text when it is not JSON. */
   readonly body: unknown;
@@ -62,7 +66,17 @@ export class APIStatusError extends FinesseError {
     this.body = body;
     this.headers = headers;
     this.billingRemaining = intOrNull(headers.get("x-billing-remaining"));
-    this.requestId = headers.get("x-request-id");
+    const fromBody = (body as { request_id?: unknown } | null)?.request_id;
+    this.requestId =
+      headers.get("x-request-id") ?? (typeof fromBody === "string" ? fromBody : null);
+  }
+
+  /** Seconds the server asked you to wait (`Retry-After`), when it sent one. */
+  get retryAfter(): number | null {
+    const v = this.headers.get("retry-after");
+    if (v === null) return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
   }
 
   /** Plan limit from an entitlement or plan-limit denial, when present. */
@@ -78,11 +92,14 @@ export class APIStatusError extends FinesseError {
 
 /** 400: invalid request (missing field, text too long, voice not enrolled, ...). */
 export class BadRequestError extends APIStatusError {}
-/** 401: the API key is missing, unknown or revoked. */
+/** 401: the API key is missing, unknown or revoked; `key_expired`; or a short-lived token is
+ * invalid, expired or already used (`token_invalid`). */
 export class AuthenticationError extends APIStatusError {}
 /** 402: out of credits (`insufficient_credits`) or quota (`quota_exhausted`). */
 export class PaymentRequiredError extends APIStatusError {}
-/** 403: the plan lacks the feature (`feature_disabled`) or a cap is reached (`plan_limit_reached`). */
+/** 403: the key lacks the route's scope (`insufficient_scope`), a token is limited to other
+ * voices (`voice_not_allowed`), the plan lacks the feature (`feature_disabled`), or a cap is
+ * reached (`plan_limit_reached`). */
 export class PermissionDeniedError extends APIStatusError {
   /** The capped feature for `plan_limit_reached`, e.g. `max_voices`. */
   get feature(): string | null {
@@ -92,9 +109,18 @@ export class PermissionDeniedError extends APIStatusError {
 }
 /** 404: no such resource, or not visible to this workspace. */
 export class NotFoundError extends APIStatusError {}
-/** 429: rate limited, or (realtime) too many concurrent sessions. */
+/** 409: e.g. a request with the same `Idempotency-Key` is still running. */
+export class ConflictError extends APIStatusError {}
+/** 413: the request body is over 21 MiB (`payload_too_large`). */
+export class PayloadTooLargeError extends APIStatusError {}
+/** 422: the synthesis service could not use the input (`invalid_input`), or an
+ * `Idempotency-Key` was reused for a different request (`idempotency_key_reused`). */
+export class UnprocessableEntityError extends APIStatusError {}
+/** 429: over the plan's requests per second (`rate_limited`) or concurrent synthesis
+ * (`concurrency_limited`), or (realtime) `too_many_sessions`. Wait `retryAfter` seconds. */
 export class RateLimitError extends APIStatusError {}
-/** 5xx: server or synthesis-engine error. */
+/** 5xx: a server error, or the synthesis service failing (`upstream_error`, 502) or at
+ * capacity (`upstream_busy`, 503, with `retryAfter`). Usually safe to retry. */
 export class InternalServerError extends APIStatusError {}
 
 /** A speech stream failed after it started. */
@@ -134,6 +160,9 @@ const STATUS_ERRORS: Record<number, typeof APIStatusError> = {
   402: PaymentRequiredError,
   403: PermissionDeniedError,
   404: NotFoundError,
+  409: ConflictError,
+  413: PayloadTooLargeError,
+  422: UnprocessableEntityError,
   429: RateLimitError,
 };
 

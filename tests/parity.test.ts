@@ -61,7 +61,7 @@ describe("withRawResponse", () => {
       withId(envelope(VOICE), "get"),
     );
     const raw = await m.client.withRawResponse.voices.cloneAndWait(
-      { name: "a", file: new Uint8Array([1]) },
+      { consent: true, name: "a", file: new Uint8Array([1]) },
       { pollInterval: 0 },
     );
     expect([raw.status, raw.requestId, raw.data.status]).toEqual([202, "clone", "ready"]);

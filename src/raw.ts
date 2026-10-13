@@ -65,9 +65,7 @@ export function rawClient<R extends Resources>(core: Core, build: (core: Core) =
         },
       },
     );
-  return {
-    voices: namespace("voices"),
-    jobs: namespace("jobs"),
-    speech: namespace("speech"),
-  } as RawClient<R>;
+  // One namespace per resource the client builds, so a new resource gets a raw form for free.
+  const names = Object.keys(build(core)) as (keyof R)[];
+  return Object.fromEntries(names.map((name) => [name, namespace(name)])) as RawClient<R>;
 }

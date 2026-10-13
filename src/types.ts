@@ -102,6 +102,16 @@ export interface StreamDone {
 }
 
 /** `wav` (one-shot default) or raw little-endian PCM. */
+/** A short-lived, single-use token from `tokens.create`. Hand `token` to a browser or device:
+ * it is good for one `speech.create` / `speech.stream` call or one realtime session, carries
+ * the `tts` scope only, and dies when the key that minted it is revoked or expires. */
+export interface AccessToken {
+  token: string;
+  /** Unix epoch ms. */
+  expires_at: number;
+  ttl_seconds: number;
+}
+
 export type OutputFormat = "wav" | "s16le" | "s24le" | "s32le" | "f32le" | "f64le";
 
 export interface SpeechParams {
