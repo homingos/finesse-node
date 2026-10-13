@@ -159,7 +159,7 @@ export class Voices {
   /** Create an empty `draft` voice. Give it a clip with {@link enroll}, or use {@link clone}. */
   async create(params: CreateVoiceParams, options: RequestOptions = {}): Promise<Voice> {
     const json = defined({ ...params });
-    return toVoice(await this.core.json("POST", "/voices", { ...options, json }));
+    return toVoice(await this.core.json("POST", "/voices", { ...options, json, idempotent: true }));
   }
 
   /** Change a voice's metadata. Only the fields you pass change. */
@@ -195,6 +195,7 @@ export class Voices {
     };
     const result = await this.core.json<CloneResult>("POST", "/voices/clone", {
       ...options,
+      idempotent: true,
       form: form(fields, params.file),
     });
     return { ...result, voice: toVoice(result.voice) };
@@ -209,6 +210,7 @@ export class Voices {
     const fields = { ref_text: params.ref_text, language: params.language };
     const result = await this.core.json<CloneResult>("POST", `/voices/${pathId(voiceId)}/enroll`, {
       ...options,
+      idempotent: true,
       form: form(fields, params.file),
     });
     return { ...result, voice: toVoice(result.voice) };

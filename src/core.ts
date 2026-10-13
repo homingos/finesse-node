@@ -64,6 +64,8 @@ export interface RequestOptions {
 }
 
 interface CallOptions extends RequestOptions {
+  /** Send one Idempotency-Key for every attempt, so the call can be retried like a read. */
+  idempotent?: boolean;
   query?: Record<string, string | number>;
   json?: unknown;
   form?: () => FormData;
@@ -170,9 +172,20 @@ export class Core {
     const { signal } = opts;
     const timeout = opts.timeout ?? this.timeout;
     const maxRetries = opts.maxRetries ?? this.maxRetries;
+    // An idempotent call carries one key for all of its attempts (the caller's, if they set
+    // one), so the server runs it at most once and every failure is safe to retry.
+    const baseHeaders: Record<string, string> = { ...this.headers, ...opts.headers };
+    let retryAs = method;
+    if (opts.idempotent && method === "POST") {
+      retryAs = "GET";
+      if (!Object.keys(baseHeaders).some((k) => k.toLowerCase() === "idempotency-key")) {
+        baseHeaders["Idempotency-Key"] = randomUUID();
+      }
+    }
+    let inProgressUntil: number | null = null;
     for (let attempt = 0; ; attempt++) {
       throwIfAborted(signal);
-      const headers: Record<string, string> = { ...this.headers, ...opts.headers };
+      const headers: Record<string, string> = { ...baseHeaders };
       let body: BodyInit | undefined;
       if (opts.json !== undefined) {
         headers["Content-Type"] = "application/json";
@@ -192,7 +205,7 @@ export class Core {
       const retryAfterError = async (err: unknown, sent: boolean): Promise<void> => {
         throwIfAborted(signal);
         const timedOut = controller.signal.reason instanceof TimeoutSignal;
-        const retry = method !== "POST" || (!sent && !timedOut && isUnsent(err));
+        const retry = retryAs !== "POST" || (!sent && !timedOut && isUnsent(err));
         if (attempt < maxRetries && retry) {
           await sleep(retryDelay(attempt, null), signal);
           return;
@@ -254,7 +267,19 @@ export class Core {
       }
       const text = new TextDecoder().decode(buffer);
 
-      const statuses = method === "POST" ? POST_RETRY_STATUSES : RETRY_STATUSES;
+      if (opts.idempotent && response.status === 409 && isInProgress(text)) {
+        // The first attempt is still running on the server: wait for it, for as long as a
+        // single request may take, without spending a retry.
+        inProgressUntil ??= Date.now() + timeout;
+        if (Date.now() < inProgressUntil) {
+          const delay = retryDelay(0, response);
+          this.info(`waiting for ${where}: the first attempt is still running`);
+          await sleep(delay, signal);
+          attempt--;
+          continue;
+        }
+      }
+      const statuses = retryAs === "POST" ? POST_RETRY_STATUSES : RETRY_STATUSES;
       if (attempt < maxRetries && statuses.has(response.status)) {
         const delay = retryDelay(attempt, response);
         this.info(
@@ -283,6 +308,26 @@ export function releaseStream(response: Response): void {
 }
 
 class TimeoutSignal extends Error {}
+
+function isInProgress(text: string): boolean {
+  try {
+    return (JSON.parse(text) as { code?: unknown })?.code === "idempotency_in_progress";
+  } catch {
+    return false;
+  }
+}
+
+function randomUUID(): string {
+  const c = (globalThis as { crypto?: Crypto }).crypto;
+  if (c?.randomUUID) return c.randomUUID();
+  const b = new Uint8Array(16);
+  if (c?.getRandomValues) c.getRandomValues(b);
+  else for (let i = 0; i < 16; i++) b[i] = Math.floor(Math.random() * 256);
+  b[6] = (b[6]! & 0x0f) | 0x40;
+  b[8] = (b[8]! & 0x3f) | 0x80;
+  const h = Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
 
 export function unwrap(body: unknown): unknown {
   if (

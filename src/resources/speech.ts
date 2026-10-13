@@ -127,6 +127,7 @@ export class Speech {
   async create(params: SpeechParams, options: RequestOptions = {}): Promise<Audio> {
     const response = await this.core.request("POST", `/voices/${pathId(params.voice_id)}/speak`, {
       ...options,
+      idempotent: true,
       json: body(params),
     });
     const h = response.headers;

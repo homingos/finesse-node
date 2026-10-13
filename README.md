@@ -43,6 +43,7 @@ and stream it in realtime to voice agents, with a few lines of code.
 - [Retries](#retries)
 - [Timeouts and cancellation](#timeouts-and-cancellation)
 - [Per-request options](#per-request-options)
+- [Request IDs](#request-ids)
 - [Advanced](#advanced)
 - [Runtimes](#runtimes)
 
@@ -340,12 +341,18 @@ try {
 
 ## Retries
 
-Transient failures are retried twice with exponential backoff, honouring `Retry-After`.
+Failed requests are retried twice with exponential backoff, honouring `Retry-After`: network
+errors, timeouts, 408, 429 and 5xx.
 
-- Reads, updates and deletes retry on network errors, timeouts, 408, 429 and 5xx.
-- Creating voices, uploading clips and synthesis can create things or cost credits, so they
-  retry only when the server certainly did no work: the connection never opened, 429, 502 or 503.
-  A synthesis that fails is refunded.
+Calls that create something or cost credits (`speech.create`, `voices.create`, `voices.clone`,
+`voices.enroll`) send an `Idempotency-Key`, the same one on every retry, so the service runs
+them at most once. A retry of a clone that already succeeded gets the first result back, and a
+retried synthesis is served from the cache at no charge. If the first attempt is still running,
+the SDK waits for it (up to the request timeout) without using up a retry. To choose the key
+yourself, pass `{ headers: { "Idempotency-Key": "..." } }`.
+
+`speech.stream` has no key, so it is only retried when the server certainly did no work: the
+connection never opened, 429, 502 or 503.
 
 ```ts
 const client = new Finesse({ maxRetries: 5 }); // every request
@@ -387,6 +394,19 @@ await client.speech.create(
 On `jobs.wait`, `voices.waitUntilReady` and `voices.cloneAndWait`, `timeout` means the overall
 time to wait for the clone.
 
+## Request IDs
+
+Every response has an `X-Request-Id`. Errors carry it as `error.requestId`; quote it when you
+contact support.
+
+```ts
+try {
+  await client.voices.get("665f1a2b3c4d5e6f7a8b9c0d");
+} catch (err) {
+  if (err instanceof NotFoundError) console.log(err.requestId); // "req_3f9c..."
+}
+```
+
 ## Advanced
 
 ### Raw responses
@@ -397,19 +417,20 @@ time to wait for the clone.
 const {
   data: audio,
   status,
+  requestId,
   headers,
 } = await client.withRawResponse.speech.create({
   voice_id,
   text: "Hello!",
 });
-console.log(status, headers.get("x-sample-rate"));
+console.log(status, requestId, headers.get("x-sample-rate"));
 ```
 
 ### Logging
 
 Set `FINESSE_LOG=debug` (or pass `logLevel: "debug"`) to log every request (method, URL, status,
-timing), or `info` to log only retries. Pass `logger` to send the lines somewhere other than
-`console`. The SDK never logs your API key, request bodies or audio.
+timing, request id), or `info` to log only retries. Pass `logger` to send the lines somewhere
+other than `console`. The SDK never logs your API key, request bodies or audio.
 
 ### Copying a client with other defaults
 

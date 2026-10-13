@@ -46,6 +46,8 @@ export class APIStatusError extends FinesseError {
   readonly headers: Headers;
   /** `X-Billing-Remaining` as a number, when sent. */
   readonly billingRemaining: number | null;
+  /** The service's `X-Request-Id` for the failed request; quote it to support. */
+  readonly requestId: string | null;
 
   constructor(
     status: number,
@@ -60,6 +62,7 @@ export class APIStatusError extends FinesseError {
     this.body = body;
     this.headers = headers;
     this.billingRemaining = intOrNull(headers.get("x-billing-remaining"));
+    this.requestId = headers.get("x-request-id");
   }
 
   /** Plan limit from an entitlement or plan-limit denial, when present. */
@@ -156,7 +159,9 @@ export function makeStatusError(
       // The credit check inside synthesis sends the code as the message.
       if (/^[a-z]+(_[a-z]+)+$/.test(b.message)) code = b.message;
     }
-    if (typeof b.error === "string" && b.error) {
+    if (typeof b.code === "string" && b.code) {
+      code = b.code;
+    } else if (typeof b.error === "string" && b.error) {
       code = b.error === "plan limit reached" ? "plan_limit_reached" : b.error;
       message ??= b.error.replace(/_/g, " ");
     } else if (b.error && typeof b.error === "object") {
