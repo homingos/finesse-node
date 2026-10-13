@@ -1,0 +1,100 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="520" viewBox="0 0 1200 520" role="img" aria-labelledby="t d">
+  <title id="t">One realtime session, many contexts</title>
+  <desc id="d">Your app runs two contexts on one WebSocket session. Text goes to Finesse with task_start, task_continue and finalize; audio comes back per context as audio_chunk frames followed by raw PCM. Cancelling a context drops audio still in flight.</desc>
+  <defs>
+    <style>
+      .sans { font-family: "Instrument Sans", -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
+      .mono { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      .h { font-size: 20px; font-weight: 700; fill: #14151A; }
+      .lbl { font-size: 13px; font-weight: 600; letter-spacing: .08em; fill: #63656A; }
+      .code { font-size: 14px; fill: #14151A; }
+      .muted { font-size: 14px; fill: #63656A; }
+      .small { font-size: 12.5px; fill: #63656A; }
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#63656A"/>
+    </marker>
+  </defs>
+
+  <rect x="0.5" y="0.5" width="1199" height="519" rx="20" fill="#F5F3EE" stroke="#E4E1D9"/>
+
+  <!-- Your app -->
+  <text x="40" y="54" class="sans lbl">YOUR APP</text>
+  <g>
+    <rect x="40" y="76" width="310" height="150" rx="12" fill="#FFFFFF" stroke="#E4E1D9"/>
+    <rect x="40" y="76" width="6" height="150" rx="3" fill="#2547F0"/>
+    <text x="62" y="104" class="sans h">Context A</text>
+    <text x="62" y="138" class="mono code">a.send("Hi! ")</text>
+    <text x="62" y="164" class="mono code">a.send("How can I help?")</text>
+    <text x="62" y="190" class="mono code">a.finish()</text>
+    <text x="62" y="214" class="sans small">text streams in as your LLM writes it</text>
+  </g>
+  <g>
+    <rect x="40" y="246" width="310" height="128" rx="12" fill="#FFFFFF" stroke="#E4E1D9"/>
+    <rect x="40" y="246" width="6" height="128" rx="3" fill="#0E7C86"/>
+    <text x="62" y="274" class="sans h">Context B</text>
+    <text x="62" y="308" class="mono code">b.send("Let me check…")</text>
+    <text x="62" y="334" class="mono code">b.cancel()</text>
+    <text x="62" y="360" class="sans small">user interrupted: stop speaking now</text>
+  </g>
+
+  <!-- The session -->
+  <text x="390" y="54" class="sans lbl">ONE WEBSOCKET SESSION</text>
+  <rect x="390" y="76" width="430" height="298" rx="14" fill="#ECEAE3"/>
+  <!-- outbound lane -->
+  <text x="410" y="106" class="sans muted">text out</text>
+  <line x1="410" y1="128" x2="800" y2="128" stroke="#63656A" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <g class="mono" font-size="12" fill="#FFFFFF" text-anchor="middle">
+    <rect x="420" y="116" width="100" height="24" rx="6" fill="#2547F0"/><text x="470" y="132">task_start</text>
+    <rect x="528" y="116" width="100" height="24" rx="6" fill="#0E7C86"/><text x="578" y="132">task_start</text>
+    <rect x="636" y="116" width="124" height="24" rx="6" fill="#2547F0"/><text x="698" y="132">task_continue</text>
+    <rect x="420" y="150" width="108" height="24" rx="6" fill="#0E7C86"/><text x="474" y="166">task_cancel</text>
+    <rect x="536" y="150" width="124" height="24" rx="6" fill="#2547F0"/><text x="598" y="166">finalize: true</text>
+  </g>
+
+  <!-- inbound lane -->
+  <text x="410" y="222" class="sans muted">audio back, in order per context</text>
+  <line x1="800" y1="244" x2="410" y2="244" stroke="#63656A" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <g>
+    <rect x="420" y="256" width="44" height="24" rx="6" fill="#2547F0"/>
+    <rect x="470" y="256" width="44" height="24" rx="6" fill="#2547F0" opacity=".75"/>
+    <rect x="520" y="256" width="44" height="24" rx="6" fill="#0E7C86"/>
+    <rect x="570" y="256" width="44" height="24" rx="6" fill="#2547F0"/>
+    <rect x="620" y="256" width="44" height="24" rx="6" fill="#2547F0" opacity=".75"/>
+    <rect x="670" y="256" width="44" height="24" rx="6" fill="#0E7C86" fill-opacity=".25" stroke="#0E7C86" stroke-dasharray="3 3"/>
+    <rect x="720" y="256" width="44" height="24" rx="6" fill="#0E7C86" fill-opacity=".25" stroke="#0E7C86" stroke-dasharray="3 3"/>
+  </g>
+  <text x="410" y="308" class="sans small">Each audio_chunk is followed by its raw PCM frame;</text>
+  <text x="410" y="328" class="sans small">the SDK pairs them and routes them to the right context.</text>
+  <text x="410" y="356" class="sans small">Dashed: B's audio after cancel, dropped by the SDK.</text>
+
+  <!-- Finesse -->
+  <text x="860" y="54" class="sans lbl">FINESSE</text>
+  <rect x="860" y="76" width="300" height="298" rx="12" fill="#FFFFFF" stroke="#E4E1D9"/>
+  <text x="882" y="108" class="sans h">Voice engine</text>
+  <text x="882" y="136" class="sans muted">speaks each context in your voice,</text>
+  <text x="882" y="158" class="sans muted">sentence by sentence, as text arrives</text>
+  <!-- waveform A -->
+  <g fill="#2547F0">
+    <rect x="882" y="196" width="5" height="22" rx="2"/><rect x="891" y="188" width="5" height="38" rx="2"/>
+    <rect x="900" y="182" width="5" height="50" rx="2"/><rect x="909" y="192" width="5" height="30" rx="2"/>
+    <rect x="918" y="186" width="5" height="42" rx="2"/><rect x="927" y="198" width="5" height="18" rx="2"/>
+    <rect x="936" y="190" width="5" height="34" rx="2"/><rect x="945" y="194" width="5" height="26" rx="2"/>
+    <rect x="954" y="200" width="5" height="14" rx="2"/><rect x="963" y="203" width="5" height="8" rx="2"/>
+  </g>
+  <text x="982" y="212" class="sans muted">A: "Hi! How can I help?"</text>
+  <!-- waveform B, cut off -->
+  <g fill="#0E7C86">
+    <rect x="882" y="262" width="5" height="18" rx="2"/><rect x="891" y="256" width="5" height="30" rx="2"/>
+    <rect x="900" y="252" width="5" height="38" rx="2"/>
+  </g>
+  <line x1="914" y1="248" x2="914" y2="294" stroke="#D23B2E" stroke-width="2"/>
+  <text x="926" y="276" class="sans muted">B: cancelled mid-sentence</text>
+  <text x="882" y="336" class="mono small">s16le · 24 kHz · mono</text>
+  <text x="882" y="358" class="sans small">billed per character as text is sent</text>
+
+  <!-- footer -->
+  <line x1="40" y1="410" x2="1160" y2="410" stroke="#E4E1D9"/>
+  <text x="40" y="446" class="sans muted">Up to 4 contexts run at once on one session, and a workspace can hold 4 sessions.</text>
+  <text x="40" y="472" class="sans muted">If the connection drops, running contexts fail with a retryable error and the next one reconnects.</text>
+</svg>
