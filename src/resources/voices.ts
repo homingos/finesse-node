@@ -116,8 +116,10 @@ export class Voices {
   }
 
   /** One of your voices or a public platform voice. */
-  async get(voiceId: string): Promise<Voice> {
-    return toVoice(await this.core.json("GET", `/voices/${pathId(voiceId)}`));
+  async get(voiceId: string, options: { signal?: AbortSignal } = {}): Promise<Voice> {
+    return toVoice(
+      await this.core.json("GET", `/voices/${pathId(voiceId)}`, { signal: options.signal }),
+    );
   }
 
   /** Create an empty `draft` voice. Give it a clip with {@link enroll}, or use {@link clone}. */
@@ -168,7 +170,7 @@ export class Voices {
   /** Wait for a clone job to finish and return the voice, now `ready`. */
   async waitUntilReady(clone: CloneResult, options: WaitOptions = {}): Promise<Voice> {
     await this.jobs.wait(clone.job_id, options);
-    return this.get(clone.voice.id);
+    return this.get(clone.voice.id, { signal: options.signal });
   }
 
   /** {@link clone}, then {@link waitUntilReady}. Returns the ready voice. */

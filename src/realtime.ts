@@ -11,7 +11,9 @@
  * await rt.close();
  * ```
  *
- * In Node this needs the `ws` package (`npm i ws`), which can send the API key as a header.
+ * In Node this needs the `ws` package (`npm i ws`), which sends the API key as a header. Bun's
+ * built-in WebSocket does too. Deno and browsers cannot set handshake headers, so there the key
+ * goes in the URL.
  */
 
 import { API_PREFIX, isBrowser, type Core } from "./core.js";
@@ -133,13 +135,17 @@ export interface TaskCancelled {
   sentences_dropped?: number;
   trace_id?: string;
 }
-/** Any other engine event, passed through as sent. */
-export interface OtherEvent {
-  type: string;
+/** An engine event this SDK version does not know yet. `event_type` is its `type` on the wire
+ * and `data` the whole frame. */
+export interface UnknownEvent {
+  type: "unknown";
   context_id: string;
-  [key: string]: unknown;
+  event_type: string;
+  data: Record<string, unknown>;
 }
-export type RealtimeEvent = TaskStarted | AudioEvent | SentenceDone | TaskDone | TaskCancelled;
+/** Every event a context yields. Narrow it on `type`. */
+export type RealtimeEvent =
+  TaskStarted | AudioEvent | SentenceDone | TaskDone | TaskCancelled | UnknownEvent;
 
 export interface ContextOptions {
   /** One of your voices or a public platform voice. */
@@ -169,7 +175,8 @@ export interface ConnectOptions {
 }
 
 const END = Symbol("end");
-type Item = RealtimeEvent | OtherEvent | RealtimeError | typeof END;
+const KNOWN_EVENTS = new Set(["task_started", "sentence_done", "task_done", "task_cancelled"]);
+type Item = RealtimeEvent | RealtimeError | typeof END;
 
 /**
  * One turn of speech. Create it with {@link RealtimeSession.context}. `send` text (the first
@@ -178,14 +185,16 @@ type Item = RealtimeEvent | OtherEvent | RealtimeError | typeof END;
  * {@link RealtimeError} if the context fails.
  *
  * Events are buffered without limit so that one slow context never stalls the others on the
- * same socket. Iterate every context you start, or `cancel()` the ones you abandon.
+ * same socket. Iterate every context you start, or `cancel()` the ones you abandon. Iterate a
+ * context from one place only: events are consumed as they are read.
  */
-export class RealtimeContext implements AsyncIterable<RealtimeEvent | OtherEvent> {
+export class RealtimeContext implements AsyncIterable<RealtimeEvent> {
   readonly id: string;
   cancelled = false;
   sampleRate: number | null = null;
   audioFormat: string | null = null;
   /** @internal */ started = false;
+  /** @internal The socket this context runs on. */ socket: unknown = null;
   /** @internal */ ended = false;
   private finished = false;
   private readonly items: Item[] = [];
@@ -204,6 +213,11 @@ export class RealtimeContext implements AsyncIterable<RealtimeEvent | OtherEvent
    * turn's last text (or call {@link finish}). */
   send(text: string, options: { finalize?: boolean } = {}): Promise<void> {
     return this.serial(async () => {
+      if (this.cancelled) {
+        throw new RealtimeError("context_cancelled", "This context was cancelled.", {
+          contextId: this.id,
+        });
+      }
       if (this.finished) {
         throw new RealtimeError("context_finished", "This context was already finalized.", {
           contextId: this.id,
@@ -243,17 +257,24 @@ export class RealtimeContext implements AsyncIterable<RealtimeEvent | OtherEvent
   /** Stop this context now. Audio still in flight for it is dropped; iterating it ends with
    * `task_cancelled`. */
   async cancel(): Promise<void> {
-    if (!this.started || this.ended || this.cancelled) return;
-    this.cancelled = true;
-    this.finished = true;
-    try {
-      this.session._send({ type: "task_cancel", context_id: this.id });
-    } catch {
-      /* the socket is gone, which ends the context anyway */
-    }
+    if (this.ended || this.cancelled) return;
+    this.cancelled = true; // from now on, audio for this context is dropped
+    this.finished = true; // and no more text is accepted
+    // Runs after any send already queued, so a start that is in flight is cancelled too.
+    await this.serial(async () => {
+      if (!this.started) {
+        this._end(); // nothing reached the server: just end the context
+        return;
+      }
+      try {
+        this.session._send({ type: "task_cancel", context_id: this.id });
+      } catch {
+        /* the socket is gone, which ends the context anyway */
+      }
+    });
   }
 
-  async *[Symbol.asyncIterator](): AsyncIterator<RealtimeEvent | OtherEvent> {
+  async *[Symbol.asyncIterator](): AsyncIterator<RealtimeEvent> {
     for (;;) {
       while (this.items.length === 0) {
         await new Promise<void>((resolve) => (this.waiter = resolve));
@@ -267,15 +288,14 @@ export class RealtimeContext implements AsyncIterable<RealtimeEvent | OtherEvent
 
   /** Iterate only the PCM of this context. */
   async *audio(): AsyncGenerator<Uint8Array> {
-    for await (const event of this) if (event.type === "audio") yield (event as AudioEvent).pcm;
+    for await (const event of this) if (event.type === "audio") yield event.pcm;
   }
 
   /** @internal */
-  _put(event: RealtimeEvent | OtherEvent): void {
+  _put(event: RealtimeEvent): void {
     if (event.type === "task_started") {
-      const e = event as TaskStarted;
-      this.sampleRate = typeof e.sample_rate === "number" ? e.sample_rate : null;
-      this.audioFormat = typeof e.audio_format === "string" ? e.audio_format : null;
+      this.sampleRate = typeof event.sample_rate === "number" ? event.sample_rate : null;
+      this.audioFormat = typeof event.audio_format === "string" ? event.audio_format : null;
     }
     this.push(event);
     if (event.type === "task_done" || event.type === "task_cancelled") this._end();
@@ -325,18 +345,50 @@ type SocketCtor = new (url: string, protocols?: unknown, options?: unknown) => S
 
 const OPEN = 1;
 
-async function defaultWebSocket(): Promise<{ ctor: SocketCtor; headers: boolean }> {
-  if (!isBrowser()) {
-    try {
-      const mod = (await import("ws")) as { default?: unknown; WebSocket?: unknown };
-      return { ctor: (mod.default ?? mod.WebSocket) as SocketCtor, headers: true };
-    } catch {
+interface Dialer {
+  /** Open a socket; `headers` is null when the key must go in the URL instead. */
+  open(url: string, headers: Record<string, string> | null, timeoutMs: number): Socket;
+  headers: boolean;
+}
+
+function versions(): Record<string, string | undefined> {
+  return (
+    (globalThis as { process?: { versions?: Record<string, string | undefined> } }).process
+      ?.versions ?? {}
+  );
+}
+
+function globalDialer(headers: boolean): Dialer {
+  const G = (globalThis as { WebSocket?: unknown }).WebSocket as SocketCtor | undefined;
+  if (!G) throw new FinesseError("No WebSocket implementation available.");
+  return {
+    headers,
+    // Bun's WebSocket takes headers as a second-argument option.
+    open: (url, h) => (h ? new G(url, { headers: h }) : new G(url)),
+  };
+}
+
+async function defaultDialer(): Promise<Dialer> {
+  if (isBrowser()) return globalDialer(false); // browsers cannot set handshake headers
+  const v = versions();
+  if (v.bun) return globalDialer(true);
+  if ((globalThis as { Deno?: unknown }).Deno || !v.node) return globalDialer(false);
+  let mod: { default?: unknown; WebSocket?: unknown };
+  try {
+    mod = (await import("ws")) as typeof mod;
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    if (code === "ERR_MODULE_NOT_FOUND" || code === "MODULE_NOT_FOUND") {
       throw new FinesseError("Realtime in Node needs the `ws` package: npm install ws");
     }
+    throw err;
   }
-  const g = (globalThis as { WebSocket?: unknown }).WebSocket;
-  if (!g) throw new FinesseError("No WebSocket implementation available.");
-  return { ctor: g as SocketCtor, headers: false };
+  const WS = (mod.default ?? mod.WebSocket) as SocketCtor;
+  return {
+    headers: true,
+    open: (url, h, timeoutMs) =>
+      new WS(url, undefined, { headers: h, handshakeTimeout: timeoutMs }),
+  };
 }
 
 /**
@@ -397,9 +449,7 @@ export class RealtimeSession {
 
   /** Speak `text` as one complete turn and yield its events. Breaking out of the loop cancels
    * the turn. */
-  async *say(
-    options: ContextOptions & { text: string },
-  ): AsyncGenerator<RealtimeEvent | OtherEvent> {
+  async *say(options: ContextOptions & { text: string }): AsyncGenerator<RealtimeEvent> {
     const { text, ...rest } = options;
     const ctx = this.context(rest);
     await ctx.send(text, { finalize: true });
@@ -413,6 +463,7 @@ export class RealtimeSession {
   /** End the session: tell the service, then close the socket. */
   async close(): Promise<void> {
     this.closed = true;
+    await this.opening?.catch(() => undefined); // an in-flight open tears itself down
     const ws = this.ws;
     if (ws && ws.readyState === OPEN) {
       try {
@@ -444,6 +495,7 @@ export class RealtimeSession {
     }
     // Register before sending so no reply can arrive for an unknown context.
     this.contexts.set(ctx.id, ctx);
+    ctx.socket = this.ws;
     try {
       this._send({ type: "task_start", context_id: ctx.id, ...ctx.options, text, finalize });
     } catch (err) {
@@ -467,23 +519,28 @@ export class RealtimeSession {
 
   private async dial(): Promise<void> {
     const timeout = this.options.openTimeout ?? DEFAULT_OPEN_TIMEOUT_MS;
-    const impl = this.options.WebSocket
-      ? { ctor: this.options.WebSocket as SocketCtor, headers: !isBrowser() }
-      : await defaultWebSocket();
+    const custom = this.options.WebSocket as SocketCtor | undefined;
+    const dialer: Dialer = custom
+      ? {
+          headers: !isBrowser(),
+          open: (url, h, t) =>
+            h ? new custom(url, undefined, { headers: h, handshakeTimeout: t }) : new custom(url),
+        }
+      : await defaultDialer();
     let url = this.url;
-    let ws: Socket;
-    if (impl.headers) {
-      const headers = { ...this.core.headers };
+    let headers: Record<string, string> | null = null;
+    if (dialer.headers) {
+      headers = { ...this.core.headers };
       delete headers.Accept;
-      ws = new impl.ctor(url, undefined, { headers, handshakeTimeout: timeout });
     } else {
-      // Browsers cannot set headers on a WebSocket handshake.
+      // No handshake headers here (browsers, Deno): the service also accepts the key and
+      // the client name as query parameters.
       const u = new URL(url);
       u.searchParams.set("api_key", this.core.apiKey);
       u.searchParams.set("client", this.core.headers["X-Finesse-Client"] ?? "");
       url = u.toString();
-      ws = new impl.ctor(url);
     }
+    const ws = dialer.open(url, headers, timeout);
     ws.binaryType = "arraybuffer";
 
     await new Promise<void>((resolve, reject) => {
@@ -512,11 +569,14 @@ export class RealtimeSession {
         );
       });
       ws.onopen = () => done();
+      let lastError = "";
       ws.onerror = (ev) => {
-        const msg = (ev as { message?: string; error?: { message?: string } })?.message;
-        setTimeout(() => done(new APIConnectionError(msg || "Connection error.")), 0);
+        const e = ev as { message?: string; error?: { message?: string } };
+        lastError = e?.error?.message || e?.message || "";
+        setTimeout(() => done(new APIConnectionError(lastError || "Connection error.")), 0);
       };
-      ws.onclose = (ev) => done(new APIConnectionError(`Connection closed (${ev.code}).`));
+      ws.onclose = (ev) =>
+        done(new APIConnectionError(lastError || `Connection closed (${ev.code}).`));
     });
 
     if (this.closed) {
@@ -530,6 +590,7 @@ export class RealtimeSession {
     this.openedOnce = true;
     ws.onerror = () => undefined; // onclose follows and carries the reason
     ws.onmessage = (ev) => {
+      if (this.ws !== ws) return; // a replaced socket
       try {
         if (typeof ev.data === "string") this.onMessage(ev.data);
         else this.onAudio(toBytes(ev.data));
@@ -541,7 +602,13 @@ export class RealtimeSession {
   }
 
   private onClose(ws: Socket, code: number, reason: string): void {
-    if (this.ws === ws) this.ws = null;
+    if (this.ws !== null && this.ws !== ws) {
+      // A replaced socket closed late: end only the contexts that ran on it.
+      const err = closeError(code, reason ?? "") ?? new RealtimeError("connection_closed");
+      for (const ctx of [...this.contexts.values()]) if (ctx.socket === ws) ctx._fail(err);
+      return;
+    }
+    this.ws = null;
     let error = this.fatal;
     if (error) error.closeCode ??= code;
     else error = closeError(code, reason ?? "");
@@ -608,7 +675,11 @@ export class RealtimeSession {
       );
       return;
     }
-    ctx._put({ ...d, type: kind, context_id: ctx.id } as OtherEvent);
+    ctx._put(
+      KNOWN_EVENTS.has(kind)
+        ? ({ ...d, type: kind, context_id: ctx.id } as RealtimeEvent)
+        : { type: "unknown", context_id: ctx.id, event_type: kind, data: d },
+    );
   }
 }
 
@@ -630,8 +701,12 @@ export class Realtime {
 }
 
 function randomId(): string {
-  const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
-  return c?.randomUUID ? c.randomUUID().replace(/-/g, "") : Math.random().toString(16).slice(2);
+  const c = (globalThis as { crypto?: Crypto }).crypto;
+  if (c?.randomUUID) return c.randomUUID().replace(/-/g, "");
+  const bytes = new Uint8Array(16);
+  if (c?.getRandomValues) c.getRandomValues(bytes);
+  else for (let i = 0; i < 16; i++) bytes[i] = Math.floor(Math.random() * 256);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 function toBytes(data: unknown): Uint8Array {

@@ -160,3 +160,18 @@ describe("speech", () => {
     expect(text(await c.speech.stream({ voice_id: VID, text: "Hi" }).readAll())).toBe("xxxxxx");
   });
 });
+
+describe("speech abort", () => {
+  it("rethrows the caller's abort mid-stream", async () => {
+    const ac = new AbortController();
+    const body = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(START)}\n\n`));
+        setTimeout(() => ac.abort(new Error("user cancelled")), 10);
+      },
+    });
+    const m = mock(new Response(body));
+    const stream = m.client.speech.stream({ voice_id: VID, text: "Hi" }, { signal: ac.signal });
+    await expect(stream.readAll()).rejects.toThrow("user cancelled");
+  });
+});

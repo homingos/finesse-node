@@ -137,3 +137,11 @@ describe("voices", () => {
     ).rejects.toBeInstanceOf(ff.CloneTimeoutError);
   });
 });
+
+describe("files", () => {
+  it("gives an untyped Blob the type guessed from its filename", async () => {
+    const m = mock(envelope({ voice: VOICE, job_id: JOB_ID }, 202));
+    await m.client.voices.clone({ name: "a", file: { data: new Blob(["x"]), filename: "a.mp3" } });
+    expect(((m.last().body as FormData).get("file") as Blob).type).toBe("audio/mpeg");
+  });
+});

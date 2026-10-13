@@ -1,6 +1,6 @@
 import { createServer, type Server } from "node:net";
 import type { IncomingMessage } from "node:http";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer, type WebSocket } from "ws";
 import * as ff from "../src/index.js";
 import type { RealtimeSession } from "../src/index.js";
@@ -505,5 +505,130 @@ describe("realtime", () => {
     await rt.close();
     const e = await collect(rt.say({ voice_id: VID, text: "x" })).catch((x) => x);
     expect(e.code).toBe("session_closed");
+  });
+
+  it("narrows events on type and passes unknown events through", async () => {
+    const engine = new Engine();
+    engine.onMessage = async (ws, msg, e) => {
+      if (msg.type === "task_start") {
+        ws.send(
+          JSON.stringify({ type: "word_timestamps", context_id: msg.context_id, words: ["hi"] }),
+        );
+      }
+      await defaultHandler(ws, msg, e);
+    };
+    const client = await start(engine);
+    await session(client, async (rt) => {
+      let total = 0;
+      let pcm: Uint8Array | null = null;
+      let unknown: ff.UnknownEvent | null = null;
+      for await (const e of rt.say({ voice_id: VID, text: "hi" })) {
+        switch (e.type) {
+          case "audio":
+            pcm = e.pcm; // typed as Uint8Array without a cast
+            break;
+          case "task_done":
+            total = e.total_audio_duration_s ?? 0;
+            break;
+          case "unknown":
+            unknown = e;
+            break;
+        }
+      }
+      expect(text(pcm!)).toBe("hi");
+      expect(total).toBe(0.5);
+      expect(unknown).toEqual({
+        type: "unknown",
+        context_id: expect.any(String),
+        event_type: "word_timestamps",
+        data: expect.objectContaining({ words: ["hi"] }),
+      });
+    });
+  });
+
+  it("cancel before the first send reaches the server sends nothing", async () => {
+    const engine = new Engine();
+    const client = await start(engine);
+    await session(client, async (rt) => {
+      const ctx = rt.context({ voice_id: VID });
+      const p = ctx.send("hi");
+      await ctx.cancel();
+      const e = await p.catch((x) => x);
+      expect(e.code).toBe("context_cancelled");
+      expect(await collect(ctx)).toEqual([]);
+    });
+    expect(engine.received.filter((m) => m.type !== "session_end")).toEqual([]);
+  });
+
+  it("cancel during an in-flight start cancels it on the server", async () => {
+    const engine = new Engine();
+    const client = await start(engine, undefined, 50);
+    const rt = client.realtime.session(); // the first send has to open the socket
+    const ctx = rt.context({ voice_id: VID });
+    const p = ctx.send("hi");
+    await new Promise((r) => setTimeout(r, 10)); // the start is now waiting on the handshake
+    await ctx.cancel();
+    await p;
+    const events = await collect(ctx);
+    await rt.close();
+    expect(engine.received.slice(0, 2).map((m) => m.type)).toEqual(["task_start", "task_cancel"]);
+    expect(events.at(-1).type).toBe("task_cancelled");
+  });
+
+  it("close() waits for an in-flight open", async () => {
+    const client = await start(new Engine(), undefined, 100);
+    const rt = client.realtime.session();
+    let settled = false;
+    const opening = rt.open().finally(() => (settled = true));
+    await new Promise((r) => setTimeout(r, 10));
+    await rt.close();
+    expect(settled).toBe(true);
+    await opening.catch(() => undefined);
+  });
+
+  it("names the network error", async () => {
+    const client = new ff.Finesse({ apiKey: "k", baseURL: "http://127.0.0.1:9" });
+    const e = await client.realtime.connect().catch((x) => x);
+    expect(e).toBeInstanceOf(ff.APIConnectionError);
+    expect(e.message).toMatch(/ECONNREFUSED/);
+  });
+
+  describe("runtime WebSocket choice", () => {
+    afterEach(() => vi.unstubAllGlobals());
+
+    function fakeWebSocket() {
+      const calls: unknown[][] = [];
+      class Fake {
+        constructor(...args: unknown[]) {
+          calls.push(args);
+          throw new Error("fake socket");
+        }
+      }
+      return { calls, Fake };
+    }
+
+    it("Bun: the global WebSocket with headers", async () => {
+      const { calls, Fake } = fakeWebSocket();
+      vi.stubGlobal("WebSocket", Fake);
+      vi.stubGlobal("process", { ...process, versions: { ...process.versions, bun: "1.1.0" } });
+      const client = new ff.Finesse({ apiKey: "flv_k", baseURL: "https://x.test" });
+      await expect(client.realtime.connect()).rejects.toThrow("fake socket");
+      expect(String(calls[0]![0])).toBe("wss://x.test/flam-voice-svc/api/v1/public/stream");
+      expect((calls[0]![1] as { headers: Record<string, string> }).headers["X-API-Key"]).toBe(
+        "flv_k",
+      );
+    });
+
+    it("Deno: the global WebSocket with the key in the URL", async () => {
+      const { calls, Fake } = fakeWebSocket();
+      vi.stubGlobal("WebSocket", Fake);
+      vi.stubGlobal("Deno", {});
+      const client = new ff.Finesse({ apiKey: "flv_k", baseURL: "https://x.test" });
+      await expect(client.realtime.connect()).rejects.toThrow("fake socket");
+      const url = new URL(String(calls[0]![0]));
+      expect(url.searchParams.get("api_key")).toBe("flv_k");
+      expect(url.searchParams.get("client")).toMatch(/^flam-finesse-node\//);
+      expect(calls[0]).toHaveLength(1);
+    });
   });
 });

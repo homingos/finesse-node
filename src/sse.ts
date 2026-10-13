@@ -1,11 +1,11 @@
+import { APITimeoutError } from "./errors.js";
+
 /** A minimal Server-Sent Events parser (only what `speech.stream` needs). */
 
 export interface SSEEvent {
   event: string;
   data: string;
 }
-
-import { APITimeoutError } from "./errors.js";
 
 /** Parse an SSE body. A read that waits longer than `idleTimeoutMs` throws `APITimeoutError`. */
 export async function* iterSSE(

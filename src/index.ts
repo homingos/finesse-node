@@ -22,7 +22,7 @@ export {
   RealtimeSession,
   RealtimeContext,
   type RealtimeEvent,
-  type OtherEvent,
+  type UnknownEvent,
   type TaskStarted,
   type AudioEvent,
   type SentenceDone,

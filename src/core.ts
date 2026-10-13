@@ -111,9 +111,12 @@ export class Core {
   }
 
   /** Send a request, retrying transient failures, and throw on an error status. With
-   * `stream: true` the caller owns the response body. */
+   * `stream: true` the caller owns the response body. A caller `signal` stops the request and
+   * any further retries, and rejects with the signal's reason. */
   async request(method: string, path: string, opts: RequestOptions = {}): Promise<Response> {
+    const { signal } = opts;
     for (let attempt = 0; ; attempt++) {
+      throwIfAborted(signal);
       const headers: Record<string, string> = { ...this.headers };
       let body: BodyInit | undefined;
       if (opts.json !== undefined) {
@@ -124,8 +127,24 @@ export class Core {
       }
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(new TimeoutSignal()), this.timeout);
-      const onAbort = () => controller.abort(opts.signal?.reason);
-      opts.signal?.addEventListener("abort", onAbort, { once: true });
+      const onAbort = () => controller.abort(signal?.reason);
+      signal?.addEventListener("abort", onAbort, { once: true });
+      const release = () => {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
+      };
+      // Returns when the failed attempt should be retried; throws otherwise.
+      const retryAfterError = async (err: unknown, sent: boolean): Promise<void> => {
+        throwIfAborted(signal);
+        const timedOut = controller.signal.reason instanceof TimeoutSignal;
+        const retry = method !== "POST" || (!sent && !timedOut && isUnsent(err));
+        if (attempt < this.maxRetries && retry) {
+          await sleep(retryDelay(attempt, null), signal);
+          return;
+        }
+        if (timedOut) throw new APITimeoutError({ cause: err });
+        throw new APIConnectionError(errorMessage(err), { cause: err });
+      };
 
       let response: Response;
       try {
@@ -136,24 +155,16 @@ export class Core {
           signal: controller.signal,
         });
       } catch (err) {
-        clearTimeout(timer);
-        opts.signal?.removeEventListener("abort", onAbort);
-        if (opts.signal?.aborted) throw err;
-        const timedOut = controller.signal.reason instanceof TimeoutSignal;
-        const retry = method !== "POST" || (!timedOut && isUnsent(err));
-        if (attempt < this.maxRetries && retry) {
-          await sleep(retryDelay(attempt, null));
-          continue;
-        }
-        if (timedOut) throw new APITimeoutError({ cause: err });
-        throw new APIConnectionError(errorMessage(err), { cause: err });
+        release();
+        await retryAfterError(err, false);
+        continue;
       }
 
       if (response.ok && opts.stream) {
         // From here the stream reader applies the timeout between chunks instead, so a long
         // stream is not cut off. The caller's signal still aborts it until it is released.
         clearTimeout(timer);
-        streamCleanups.set(response, () => opts.signal?.removeEventListener("abort", onAbort));
+        streamCleanups.set(response, () => signal?.removeEventListener("abort", onAbort));
         return response;
       }
       // Read the whole body while the timeout still applies.
@@ -161,14 +172,11 @@ export class Core {
       try {
         buffer = await response.arrayBuffer();
       } catch (err) {
-        if (controller.signal.reason instanceof TimeoutSignal) {
-          throw new APITimeoutError({ cause: err });
-        }
-        throw new APIConnectionError(errorMessage(err), { cause: err });
-      } finally {
-        clearTimeout(timer);
-        opts.signal?.removeEventListener("abort", onAbort);
+        release();
+        await retryAfterError(err, true);
+        continue;
       }
+      release();
       if (response.ok) {
         const empty = response.status === 204 || response.status === 205 || response.status === 304;
         return new Response(empty ? null : buffer, {
@@ -180,7 +188,7 @@ export class Core {
 
       const statuses = method === "POST" ? POST_RETRY_STATUSES : RETRY_STATUSES;
       if (attempt < this.maxRetries && statuses.has(response.status)) {
-        await sleep(retryDelay(attempt, response));
+        await sleep(retryDelay(attempt, response), signal);
         continue;
       }
       throw makeStatusError(response.status, text, response.headers, response.statusText);
@@ -242,11 +250,35 @@ export function retryDelay(attempt: number, response: Response | null): number {
   return base * (1 - 0.25 * Math.random());
 }
 
-export let sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+let wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** Test seam: replace the backoff sleep. */
+/** Sleep `ms`, rejecting with the signal's reason if it aborts first. */
+export async function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  throwIfAborted(signal);
+  if (!signal) return wait(ms);
+  let onAbort: () => void = () => undefined;
+  const aborted = new Promise<never>((_, reject) => {
+    onAbort = () => reject(abortReason(signal));
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    await Promise.race([wait(ms), aborted]);
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+  }
+}
+
+/** Test seam: replace the backoff wait. */
 export function _setSleep(fn: (ms: number) => Promise<void>): void {
-  sleep = fn;
+  wait = fn;
+}
+
+export function abortReason(signal: AbortSignal): unknown {
+  return signal.reason ?? new DOMException("This operation was aborted.", "AbortError");
+}
+
+export function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw abortReason(signal);
 }
 
 /** Escape an id for use as one URL path segment, so it cannot change the route. */

@@ -1,7 +1,8 @@
 # @flam/finesse
 
 TypeScript SDK for the Finesse voice API: clone voices, synthesize speech, and stream speech in
-realtime over a WebSocket. Works in Node 18+, Bun and Deno; realtime in Node needs `ws`.
+realtime over a WebSocket. Works in Node 18+, Bun and Deno. Realtime in Node needs the `ws`
+package; Bun and Deno use their built-in WebSocket.
 
 > Private preview. Install from GitHub until the package is published.
 
@@ -109,9 +110,13 @@ throws `RateLimitError` with `code === "too_many_sessions"`, so run several cont
 session instead. Events are buffered per context so a slow one never stalls the others: iterate
 every context you start, or `cancel()` it.
 
-Browsers cannot send headers on a WebSocket, so in a browser the key goes in the URL. The client
-refuses to run in a browser unless you pass `dangerouslyAllowBrowser: true`; call Finesse from
-your server instead.
+Node (with `ws`) and Bun send the API key as a header. Browsers and Deno cannot set headers on a
+WebSocket handshake, so there the key goes in the URL. The client refuses to run in a browser
+unless you pass `dangerouslyAllowBrowser: true`; call Finesse from your server instead.
+
+`speech.create`, `speech.stream`, `voices.get`, `jobs.get`, `jobs.wait` and
+`voices.waitUntilReady` / `cloneAndWait` take an optional `signal` (an `AbortSignal`) that stops
+the request, any retries, and any waiting.
 
 ## Errors
 

@@ -87,3 +87,90 @@ describe("retries", () => {
     expect(retryDelay(10, null)).toBeGreaterThanOrEqual(6000);
   });
 });
+
+describe("caller abort", () => {
+  it("does not send when the signal is already aborted", async () => {
+    const m = mock(envelope(VOICE));
+    const ac = new AbortController();
+    ac.abort(new Error("stop"));
+    await expect(m.client._core.request("GET", "/voices", { signal: ac.signal })).rejects.toThrow(
+      "stop",
+    );
+    expect(m.requests).toHaveLength(0);
+  });
+
+  it("stops retrying when aborted during backoff", async () => {
+    const { _setSleep } = await import("../src/core.js");
+    _setSleep((ms) => new Promise((r) => setTimeout(r, Math.min(ms, 200))));
+    const m = mock(
+      new Response(null, { status: 503, headers: { "retry-after": "1" } }),
+      envelope(VOICE),
+    );
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(new Error("user cancelled")), 20);
+    const started = Date.now();
+    await expect(m.client._core.request("GET", "/voices", { signal: ac.signal })).rejects.toThrow(
+      "user cancelled",
+    );
+    expect(Date.now() - started).toBeLessThan(150);
+    expect(m.requests).toHaveLength(1);
+  });
+
+  it("rethrows the abort reason when aborted while reading the body", async () => {
+    const ac = new AbortController();
+    const body = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(new Uint8Array([1]));
+        setTimeout(() => ac.abort(new Error("user cancelled")), 10);
+      },
+    });
+    const m = mock(new Response(body));
+    await expect(
+      m.client.speech.create({ voice_id: VOICE.id, text: "hi" }, { signal: ac.signal }),
+    ).rejects.toThrow("user cancelled");
+  });
+
+  it("retries a failed body read on reads but not on POSTs", async () => {
+    const broken = () =>
+      new Response(
+        new ReadableStream({
+          start(c) {
+            // Even an error that looks like "never connected" must not retry a POST once the
+            // response headers arrived: the server already ran it.
+            c.error(Object.assign(new TypeError("terminated"), { code: "ECONNREFUSED" }));
+          },
+        }),
+      );
+    const m = mock(broken(), envelope(VOICE));
+    await m.client.voices.get(VOICE.id);
+    expect(m.requests).toHaveLength(2);
+    const m2 = mock(broken(), envelope(VOICE));
+    await expect(
+      m2.client.speech.create({ voice_id: VOICE.id, text: "hi" }),
+    ).rejects.toBeInstanceOf(ff.APIConnectionError);
+    expect(m2.requests).toHaveLength(1);
+  });
+
+  it("cancels a clone wait", async () => {
+    const running = () =>
+      envelope({
+        id: "j",
+        org_id: "o",
+        job_type: "instant_clone",
+        status: "running",
+        progress: 0,
+        attempts: 0,
+      });
+    const { _setSleep } = await import("../src/core.js");
+    _setSleep((ms) => new Promise((r) => setTimeout(r, ms)));
+    const m = mock(running(), running(), running());
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(new Error("give up")), 20);
+    const started = Date.now();
+    await expect(
+      m.client.jobs.wait("j", { pollInterval: 1000, signal: ac.signal }),
+    ).rejects.toThrow("give up");
+    expect(Date.now() - started).toBeLessThan(500);
+    expect(m.requests).toHaveLength(1);
+  });
+});

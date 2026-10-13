@@ -1,4 +1,4 @@
-import { pathId, releaseStream, type Core } from "../core.js";
+import { pathId, releaseStream, throwIfAborted, type Core } from "../core.js";
 import { APIConnectionError, FinesseError, StreamError } from "../errors.js";
 import { iterSSE } from "../sse.js";
 import type { Audio, AudioChunk, SpeechParams, StreamDone } from "../types.js";
@@ -62,6 +62,7 @@ export class SpeechStream implements AsyncIterable<AudioChunk> {
         throw new StreamError("stream_incomplete", "The stream ended before it finished.");
       }
     } catch (err) {
+      throwIfAborted(this.signal);
       if (err instanceof FinesseError) throw err;
       throw new APIConnectionError(
         err instanceof Error ? err.message : "The stream was interrupted.",

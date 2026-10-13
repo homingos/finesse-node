@@ -33,7 +33,9 @@ export function toBlob(file: FileInput): { blob: Blob; filename: string } {
     Blob | Uint8Array | ArrayBuffer
   >;
   const contentType = (file as { contentType?: string }).contentType ?? guessType(filename);
-  const blob = data instanceof Blob ? data : new Blob([data as BlobPart], { type: contentType });
+  // Keep a Blob's own type; give untyped data the one guessed from the filename.
+  const blob =
+    data instanceof Blob && data.type ? data : new Blob([data as BlobPart], { type: contentType });
   return { blob, filename };
 }
 
