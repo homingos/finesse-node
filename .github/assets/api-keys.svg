@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="560" viewBox="0 0 1200 560" role="img" aria-labelledby="t d">
+  <title id="t">Create an API key in the Finesse dashboard</title>
+  <desc id="d">The Finesse dashboard at Settings, API Keys. Type a name for the key and press Create key. Keys are listed with their name, prefix (flv_ followed by eight characters), status, last used and created dates, and a Revoke button.</desc>
+  <defs>
+    <style>
+      .sans { font-family: "Instrument Sans", -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
+      .mono { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      .nav { font-size: 14px; fill: #14151A; }
+      .navmuted { font-size: 12px; fill: #63656A; }
+      .th { font-size: 11.5px; font-weight: 600; letter-spacing: .06em; fill: #63656A; }
+      .td { font-size: 14px; fill: #14151A; }
+      .tdb { font-size: 14px; font-weight: 600; fill: #14151A; }
+      .tdm { font-size: 13px; fill: #63656A; }
+      .note { font-size: 14px; font-weight: 600; fill: #2547F0; }
+    </style>
+  </defs>
+
+  <rect x="0.5" y="0.5" width="1199" height="559" rx="20" fill="#FCFBF8" stroke="#E4E1D9"/>
+
+  <!-- sidebar -->
+  <image x="30" y="28" width="98" height="36" href="data:image/png;base64,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"/>
+  <text x="32" y="108" class="sans navmuted">Developers</text>
+  <text x="44" y="138" class="sans nav">API Playground</text>
+  <rect x="24" y="152" width="188" height="32" rx="8" fill="#ECEAE3"/>
+  <text x="44" y="173" class="sans nav" font-weight="600">API Keys</text>
+  <text x="44" y="208" class="sans nav">Request Log</text>
+  <text x="44" y="240" class="sans nav">Generations</text>
+  <text x="44" y="272" class="sans nav">Analytics</text>
+  <text x="32" y="320" class="sans navmuted">Account</text>
+  <text x="44" y="350" class="sans nav">Settings</text>
+  <text x="44" y="382" class="sans nav">Billing</text>
+  <rect x="24" y="488" width="188" height="44" rx="10" fill="#FFFFFF" stroke="#E4E1D9"/>
+  <rect x="34" y="498" width="24" height="24" rx="6" fill="#14151A"/>
+  <text x="46" y="515" class="sans" font-size="11" font-weight="700" fill="#FFFFFF" text-anchor="middle">A</text>
+  <text x="68" y="508" class="sans" font-size="13" font-weight="600" fill="#14151A">Acme Studio</text>
+  <text x="68" y="524" class="sans" font-size="11" fill="#63656A">Workspace</text>
+
+  <!-- main panel -->
+  <rect x="236" y="20" width="944" height="520" rx="16" fill="#F5F3EE" stroke="#E4E1D9"/>
+  <text x="272" y="66" class="sans" font-size="24" font-weight="700" fill="#14151A">API Keys</text>
+  <text x="272" y="92" class="sans" font-size="14" fill="#63656A">Create developer API keys to access the public Finesse API for Acme Studio.</text>
+
+  <rect x="272" y="114" width="872" height="384" rx="14" fill="#FFFFFF" stroke="#E4E1D9"/>
+  <text x="296" y="148" class="sans th">CREATE NEW KEY</text>
+  <rect x="296" y="160" width="620" height="40" rx="8" fill="#FCFBF8" stroke="#2547F0" stroke-width="1.5"/>
+  <text x="312" y="185" class="sans" font-size="14" fill="#14151A">My backend</text>
+  <rect x="930" y="160" width="190" height="40" rx="8" fill="#14151A"/>
+  <text x="1025" y="185" class="sans" font-size="14" font-weight="600" fill="#FFFFFF" text-anchor="middle">+  Create key</text>
+
+  <!-- table -->
+  <line x1="296" y1="232" x2="1120" y2="232" stroke="#E4E1D9"/>
+  <text x="296" y="254" class="sans th">NAME</text>
+  <text x="500" y="254" class="sans th">PREFIX</text>
+  <text x="650" y="254" class="sans th">STATUS</text>
+  <text x="770" y="254" class="sans th">LAST USED</text>
+  <text x="920" y="254" class="sans th">CREATED</text>
+  <text x="1120" y="254" class="sans th" text-anchor="end">ACTIONS</text>
+  <g>
+    <line x1="296" y1="270" x2="1120" y2="270" stroke="#EEECE5"/>
+    <text x="296" y="300" class="sans tdb">Production server</text>
+    <text x="500" y="300" class="mono tdm">flv_4f2a91c0</text>
+    <rect x="650" y="284" width="64" height="24" rx="12" fill="#1F9D63" fill-opacity=".12"/>
+    <text x="682" y="301" class="sans" font-size="11" font-weight="700" fill="#1F9D63" text-anchor="middle">ACTIVE</text>
+    <text x="770" y="300" class="sans tdm">12 Oct, 16:18</text>
+    <text x="920" y="300" class="sans tdm">6 Oct, 12:15</text>
+    <rect x="1050" y="284" width="70" height="26" rx="6" fill="#FFFFFF" stroke="#D23B2E" stroke-opacity=".4"/>
+    <text x="1085" y="302" class="sans" font-size="12.5" font-weight="600" fill="#D23B2E" text-anchor="middle">Revoke</text>
+  </g>
+  <g>
+    <line x1="296" y1="324" x2="1120" y2="324" stroke="#EEECE5"/>
+    <text x="296" y="354" class="sans tdb">Staging</text>
+    <text x="500" y="354" class="mono tdm">flv_b81d07e3</text>
+    <rect x="650" y="338" width="64" height="24" rx="12" fill="#1F9D63" fill-opacity=".12"/>
+    <text x="682" y="355" class="sans" font-size="11" font-weight="700" fill="#1F9D63" text-anchor="middle">ACTIVE</text>
+    <text x="770" y="354" class="sans tdm">12 Oct, 14:36</text>
+    <text x="920" y="354" class="sans tdm">6 Oct, 12:15</text>
+    <rect x="1050" y="338" width="70" height="26" rx="6" fill="#FFFFFF" stroke="#D23B2E" stroke-opacity=".4"/>
+    <text x="1085" y="356" class="sans" font-size="12.5" font-weight="600" fill="#D23B2E" text-anchor="middle">Revoke</text>
+  </g>
+
+  <!-- annotations -->
+  <circle cx="296" cy="420" r="13" fill="#2547F0"/>
+  <text x="296" y="425" class="sans" font-size="13" font-weight="700" fill="#FFFFFF" text-anchor="middle">1</text>
+  <text x="318" y="425" class="sans note">Name the key and press Create key.</text>
+  <circle cx="296" cy="460" r="13" fill="#2547F0"/>
+  <text x="296" y="465" class="sans" font-size="13" font-weight="700" fill="#FFFFFF" text-anchor="middle">2</text>
+  <text x="318" y="465" class="sans note">Copy the key: it's shown only once. It starts with flv_. Set it as FINESSE_API_KEY.</text>
+  <text x="318" y="486" class="sans tdm">The list only shows each key's prefix. Revoke a key here if it leaks.</text>
+</svg>

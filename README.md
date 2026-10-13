@@ -62,7 +62,8 @@ Once it is published this becomes `npm install @flam/finesse`.
 ## Get an API key
 
 1. Sign in to the [Finesse dashboard](https://finesse.flamapp.ai/dashboard).
-2. Open **Settings → API keys** and create a key. It starts with `flv_`.
+2. Open **Settings → API keys** and create a key. Copy it right away: it is shown only once,
+   and it starts with `flv_`.
 3. Put it in your environment, where the SDK finds it:
 
 ```sh
@@ -70,6 +71,10 @@ export FINESSE_API_KEY="flv_..."
 ```
 
 Keep the key on your server. Anyone who has it can spend your workspace's credits.
+
+<p align="center">
+  <img alt="The API Keys page in the Finesse dashboard: name a key, press Create key, and copy it once" src="./.github/assets/api-keys.svg" width="100%">
+</p>
 
 ## Quickstart
 
