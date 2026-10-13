@@ -5,6 +5,15 @@ import { envelope, error, mock, netError, VOICE } from "./helpers.js";
 
 const ok = () => new Response(new Uint8Array([82, 73, 70, 70]), { status: 200 });
 
+/** A response from a server that honours keys: it echoes the request's key. */
+const echo =
+  (res: Response) =>
+  (r: { headers: Headers }): Response => {
+    const key = r.headers.get("idempotency-key");
+    if (key) res.headers.set("idempotency-key", key);
+    return res;
+  };
+
 describe("retries", () => {
   it("retries reads then succeeds", async () => {
     const m = mock(error(503, "busy"), error(429, "slow"), envelope(VOICE));
@@ -48,7 +57,7 @@ describe("retries", () => {
   });
 
   it("retries keyed POSTs with one key", async () => {
-    const m = mock(error(500, "boom"), netError("ECONNRESET"), error(504, "gw"), ok());
+    const m = mock(echo(error(500, "boom")), netError("ECONNRESET"), error(504, "gw"), ok());
     await m.make({ maxRetries: 3 }).speech.create({ voice_id: VOICE.id, text: "hi" });
     const keys = m.requests.map((r) => r.headers.get("idempotency-key"));
     expect(keys).toHaveLength(4);
@@ -82,6 +91,7 @@ describe("retries", () => {
   it("waits while the first attempt runs, without spending retries", async () => {
     // After three in-progress waits a 503 must still be retried: waiting spends no retries.
     const m = mock(
+      echo(envelope(VOICE, 201)), // an earlier call taught the client keys are honoured
       netError("ECONNRESET"),
       inProgress(),
       inProgress(),
@@ -89,9 +99,10 @@ describe("retries", () => {
       error(503, "busy"),
       envelope(VOICE, 201),
     );
+    await m.client.voices.create({ name: "first" });
     await m.client.voices.create({ name: "x" });
-    expect(m.requests).toHaveLength(6);
-    expect(new Set(m.requests.map((r) => r.headers.get("idempotency-key"))).size).toBe(1);
+    expect(m.requests).toHaveLength(7);
+    expect(new Set(m.requests.slice(1).map((r) => r.headers.get("idempotency-key"))).size).toBe(1);
   });
 
   it("gives up waiting after the timeout", async () => {
@@ -159,9 +170,11 @@ describe("retries", () => {
       m.make({ timeout: 10 })._core.request("POST", "/x", { json: {} }),
     ).rejects.toBeInstanceOf(ff.APITimeoutError);
     expect(m.requests).toHaveLength(1);
-    const m2 = mock(hang, envelope(VOICE, 201));
-    await m2.make({ timeout: 10 }).voices.create({ name: "x" });
-    expect(m2.requests).toHaveLength(2);
+    const m2 = mock(echo(envelope(VOICE, 201)), hang, envelope(VOICE, 201));
+    const c2 = m2.make({ timeout: 10 });
+    await c2.voices.create({ name: "a" }); // the server echoes: keys are honoured
+    await c2.voices.create({ name: "x" });
+    expect(m2.requests).toHaveLength(3);
   });
 
   it("computes backoff and honours Retry-After", () => {
@@ -257,5 +270,30 @@ describe("caller abort", () => {
     ).rejects.toThrow("give up");
     expect(Date.now() - started).toBeLessThan(500);
     expect(m.requests).toHaveLength(1);
+  });
+});
+
+describe("servers that don't honour keys", () => {
+  it("keep the cautious POST rules", async () => {
+    const m = mock(error(500, "boom"));
+    await expect(m.client.speech.create({ voice_id: VOICE.id, text: "hi" })).rejects.toBeInstanceOf(
+      ff.InternalServerError,
+    );
+    expect(m.requests).toHaveLength(1);
+    const m2 = mock(() => new Promise<Response>(() => undefined));
+    await expect(m2.make({ timeout: 10 }).voices.create({ name: "x" })).rejects.toBeInstanceOf(
+      ff.APITimeoutError,
+    );
+    expect(m2.requests).toHaveLength(1);
+    const m3 = mock(error(502, "warming"), new Response(new Uint8Array([1])));
+    await m3.client.speech.create({ voice_id: VOICE.id, text: "hi" });
+    expect(m3.requests).toHaveLength(2); // 502: the server did no work, safe either way
+  });
+
+  it("an echo unlocks retries for the client and its copies", async () => {
+    const m = mock(echo(envelope(VOICE, 201)), error(500, "boom"), envelope(VOICE, 201));
+    await m.client.voices.create({ name: "a" });
+    await m.client.withOptions({ timeout: 5_000 }).voices.create({ name: "b" });
+    expect(m.requests).toHaveLength(3);
   });
 });

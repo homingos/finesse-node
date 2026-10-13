@@ -93,6 +93,8 @@ export class Core {
   readonly fetch: Fetch;
   readonly logLevel: LogLevel;
   readonly logger: Logger;
+  /** @internal What this client learned about the server; shared by `withOptions` copies. */
+  readonly server = { honoursIdempotencyKeys: false };
   /** @internal Called with each successful response (used by `withRawResponse`). */
   onResponse: ((response: Response) => void) | null = null;
 
@@ -175,13 +177,20 @@ export class Core {
     // An idempotent call carries one key for all of its attempts (the caller's, if they set
     // one), so the server runs it at most once and every failure is safe to retry.
     const baseHeaders: Record<string, string> = { ...this.headers, ...opts.headers };
-    let retryAs = method;
+    let key: string | null = null;
     if (opts.idempotent && method === "POST") {
-      retryAs = "GET";
-      if (!Object.keys(baseHeaders).some((k) => k.toLowerCase() === "idempotency-key")) {
-        baseHeaders["Idempotency-Key"] = randomUUID();
-      }
+      const own = Object.keys(baseHeaders).find((k) => k.toLowerCase() === "idempotency-key");
+      key = own ? baseHeaders[own]! : randomUUID();
+      if (!own) baseHeaders["Idempotency-Key"] = key;
     }
+    // A keyed POST is retried like a read only once the server has shown it honours keys by
+    // echoing one back; until then (an older server) it keeps the cautious POST rules.
+    const retryAs = (response: Response | null): string => {
+      if (key === null) return method;
+      if (response?.headers.get("idempotency-key") === key)
+        this.server.honoursIdempotencyKeys = true;
+      return this.server.honoursIdempotencyKeys ? "GET" : method;
+    };
     let inProgressUntil: number | null = null;
     for (let attempt = 0; ; attempt++) {
       throwIfAborted(signal);
@@ -205,7 +214,7 @@ export class Core {
       const retryAfterError = async (err: unknown, sent: boolean): Promise<void> => {
         throwIfAborted(signal);
         const timedOut = controller.signal.reason instanceof TimeoutSignal;
-        const retry = retryAs !== "POST" || (!sent && !timedOut && isUnsent(err));
+        const retry = retryAs(null) !== "POST" || (!sent && !timedOut && isUnsent(err));
         if (attempt < maxRetries && retry) {
           await sleep(retryDelay(attempt, null), signal);
           return;
@@ -231,6 +240,7 @@ export class Core {
         this.info(`retrying ${where} (attempt ${attempt + 1} failed: ${errorMessage(err)})`);
         continue;
       }
+      retryAs(response); // learn whether this server honours keys
       this.debug(
         `${where} -> ${response.status} in ${Date.now() - started} ms` +
           (attempt ? `, attempt ${attempt + 1}` : "") +
@@ -267,7 +277,7 @@ export class Core {
       }
       const text = new TextDecoder().decode(buffer);
 
-      if (opts.idempotent && response.status === 409 && isInProgress(text)) {
+      if (key !== null && response.status === 409 && isInProgress(text)) {
         // The first attempt is still running on the server: wait for it, for as long as a
         // single request may take, without spending a retry.
         inProgressUntil ??= Date.now() + timeout;
@@ -279,7 +289,7 @@ export class Core {
           continue;
         }
       }
-      const statuses = retryAs === "POST" ? POST_RETRY_STATUSES : RETRY_STATUSES;
+      const statuses = retryAs(response) === "POST" ? POST_RETRY_STATUSES : RETRY_STATUSES;
       if (attempt < maxRetries && statuses.has(response.status)) {
         const delay = retryDelay(attempt, response);
         this.info(

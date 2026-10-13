@@ -346,13 +346,16 @@ errors, timeouts, 408, 429 and 5xx.
 
 Calls that create something or cost credits (`speech.create`, `voices.create`, `voices.clone`,
 `voices.enroll`) send an `Idempotency-Key`, the same one on every retry, so the service runs
-them at most once. A retry of a clone that already succeeded gets the first result back, and a
+them at most once. The SDK retries them this way only once the service has confirmed it
+honours keys (it echoes the key back); against a service that doesn't, they keep the cautious
+rules below, so nothing can run twice. A retry of a clone that already succeeded gets the first result back, and a
 retried synthesis is served from the cache at no charge. If the first attempt is still running,
 the SDK waits for it (up to the request timeout) without using up a retry. To choose the key
 yourself, pass `{ headers: { "Idempotency-Key": "..." } }`.
 
 `speech.stream` has no key, so it is only retried when the server certainly did no work: the
-connection never opened, 429, 502 or 503.
+connection never opened, 429, 502 or 503. These are also the rules for keyed calls until the
+service confirms it honours keys.
 
 ```ts
 const client = new Finesse({ maxRetries: 5 }); // every request
