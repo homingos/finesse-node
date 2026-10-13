@@ -7,3 +7,4 @@
 - One error hierarchy over the API's error shapes; billing-safe retries with backoff.
 - Per-call `{ signal, timeout, maxRetries, headers }` on every request method.
 - `for await (const voice of client.voices.list())` without awaiting the first page.
+- `client.withRawResponse`, `client.withOptions()` and `logLevel` / `FINESSE_LOG` logging.

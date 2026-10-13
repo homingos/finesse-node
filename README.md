@@ -389,6 +389,35 @@ time to wait for the clone.
 
 ## Advanced
 
+### Raw responses
+
+`client.withRawResponse` has the same methods and resolves to the HTTP response with the result:
+
+```ts
+const {
+  data: audio,
+  status,
+  headers,
+} = await client.withRawResponse.speech.create({
+  voice_id,
+  text: "Hello!",
+});
+console.log(status, headers.get("x-sample-rate"));
+```
+
+### Logging
+
+Set `FINESSE_LOG=debug` (or pass `logLevel: "debug"`) to log every request (method, URL, status,
+timing), or `info` to log only retries. Pass `logger` to send the lines somewhere other than
+`console`. The SDK never logs your API key, request bodies or audio.
+
+### Copying a client with other defaults
+
+```ts
+const quick = client.withOptions({ timeout: 10_000, maxRetries: 0 });
+await quick.voices.get(voiceId);
+```
+
 ### Environments
 
 The client talks to production by default. Point it elsewhere with `baseURL` or
@@ -409,6 +438,8 @@ const client = new Finesse({ baseURL: "https://fi.development.flamapis.com" });
 | `defaultHeaders`          |                      | none                                 |
 | `fetch`                   |                      | the global `fetch`                   |
 | `dangerouslyAllowBrowser` |                      | `false`                              |
+| `logLevel`                | `FINESSE_LOG`        | `"off"`                              |
+| `logger`                  |                      | `console`                            |
 
 ### Custom fetch
 
