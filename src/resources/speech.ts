@@ -1,4 +1,4 @@
-import { pathId, releaseStream, throwIfAborted, type Core } from "../core.js";
+import { pathId, releaseStream, throwIfAborted, type Core, type RequestOptions } from "../core.js";
 import { APIConnectionError, FinesseError, StreamError } from "../errors.js";
 import { iterSSE } from "../sse.js";
 import type { Audio, AudioChunk, SpeechParams, StreamDone } from "../types.js";
@@ -40,21 +40,22 @@ export class SpeechStream implements AsyncIterable<AudioChunk> {
     private readonly core: Core,
     private readonly path: string,
     private readonly json: Record<string, unknown>,
-    private readonly signal?: AbortSignal,
+    private readonly options: RequestOptions = {},
   ) {}
 
   async *[Symbol.asyncIterator](): AsyncIterator<AudioChunk> {
     if (this.consumed) throw new FinesseError("This stream was already consumed; start a new one.");
     this.consumed = true;
     const response = await this.core.request("POST", this.path, {
+      ...this.options,
       json: this.json,
       stream: true,
-      signal: this.signal,
     });
     this.billingRemaining = intHeader(response.headers, "x-billing-remaining");
     try {
       if (!response.body) throw new StreamError("stream_incomplete", "The response had no body.");
-      for await (const ev of iterSSE(response.body, this.core.timeout)) {
+      const idle = this.options.timeout ?? this.core.timeout;
+      for await (const ev of iterSSE(response.body, idle)) {
         const chunk = this.handle(ev.event, ev.data);
         if (chunk) yield chunk;
       }
@@ -62,7 +63,7 @@ export class SpeechStream implements AsyncIterable<AudioChunk> {
         throw new StreamError("stream_incomplete", "The stream ended before it finished.");
       }
     } catch (err) {
-      throwIfAborted(this.signal);
+      throwIfAborted(this.options.signal);
       if (err instanceof FinesseError) throw err;
       throw new APIConnectionError(
         err instanceof Error ? err.message : "The stream was interrupted.",
@@ -123,10 +124,10 @@ export class Speech {
   constructor(private readonly core: Core) {}
 
   /** Synthesize `text` and return the whole clip (`wav` unless `output_format` says otherwise). */
-  async create(params: SpeechParams, options: { signal?: AbortSignal } = {}): Promise<Audio> {
+  async create(params: SpeechParams, options: RequestOptions = {}): Promise<Audio> {
     const response = await this.core.request("POST", `/voices/${pathId(params.voice_id)}/speak`, {
+      ...options,
       json: body(params),
-      signal: options.signal,
     });
     const h = response.headers;
     return {
@@ -145,12 +146,12 @@ export class Speech {
    * for await (const chunk of client.speech.stream({ voice_id, text: "Hello" })) play(chunk.pcm);
    * ```
    */
-  stream(params: SpeechParams, options: { signal?: AbortSignal } = {}): SpeechStream {
+  stream(params: SpeechParams, options: RequestOptions = {}): SpeechStream {
     return new SpeechStream(
       this.core,
       `/voices/${pathId(params.voice_id)}/stream`,
       body(params),
-      options.signal,
+      options,
     );
   }
 }

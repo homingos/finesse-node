@@ -1,4 +1,4 @@
-import { pathId, type Core } from "../core.js";
+import { pathId, type Core, type RequestOptions } from "../core.js";
 import { toBlob, type FileInput } from "../files.js";
 import { toVoice, type CloneResult, type Voice } from "../types.js";
 import { Jobs, type WaitOptions } from "./jobs.js";
@@ -96,6 +96,39 @@ function form(fields: Record<string, string | undefined>, file: FileInput): () =
   };
 }
 
+/** What `voices.list()` returns: `await` it for the first page, or iterate it directly with
+ * `for await` to walk every voice. The first page is fetched once, on first use. */
+export class VoicePagePromise implements PromiseLike<VoicePage>, AsyncIterable<Voice> {
+  private first: Promise<VoicePage> | null = null;
+
+  constructor(private readonly load: () => Promise<VoicePage>) {}
+
+  private page(): Promise<VoicePage> {
+    return (this.first ??= this.load());
+  }
+
+  then<A = VoicePage, B = never>(
+    onfulfilled?: ((value: VoicePage) => A | PromiseLike<A>) | null,
+    onrejected?: ((reason: unknown) => B | PromiseLike<B>) | null,
+  ): Promise<A | B> {
+    return this.page().then(onfulfilled, onrejected);
+  }
+
+  catch<B = never>(
+    onrejected?: ((reason: unknown) => B | PromiseLike<B>) | null,
+  ): Promise<VoicePage | B> {
+    return this.page().catch(onrejected);
+  }
+
+  finally(onfinally?: (() => void) | null): Promise<VoicePage> {
+    return this.page().finally(onfinally);
+  }
+
+  async *[Symbol.asyncIterator](): AsyncIterator<Voice> {
+    yield* await this.page();
+  }
+}
+
 /** Create, list, clone and manage voices. */
 export class Voices {
   constructor(
@@ -103,44 +136,52 @@ export class Voices {
     private readonly jobs: Jobs,
   ) {}
 
-  /** Your voices (newest first), then the public platform voices. */
-  async list(params: ListVoicesParams = {}): Promise<VoicePage> {
+  /** Your voices (newest first), then the public platform voices.
+   * `for await (const voice of client.voices.list())` walks every page;
+   * `await client.voices.list()` returns just the first page. */
+  list(params: ListVoicesParams = {}, options: RequestOptions = {}): VoicePagePromise {
     const pageSize = params.page_size ?? 50;
     const fetchPage = async (page: number): Promise<VoicePage> => {
       const data = await this.core.json<Record<string, unknown>>("GET", "/voices", {
+        ...options,
         query: { page, page_size: pageSize },
       });
       return new VoicePage(data, fetchPage);
     };
-    return fetchPage(params.page ?? 1);
+    return new VoicePagePromise(() => fetchPage(params.page ?? 1));
   }
 
   /** One of your voices or a public platform voice. */
-  async get(voiceId: string, options: { signal?: AbortSignal } = {}): Promise<Voice> {
-    return toVoice(
-      await this.core.json("GET", `/voices/${pathId(voiceId)}`, { signal: options.signal }),
-    );
+  async get(voiceId: string, options: RequestOptions = {}): Promise<Voice> {
+    return toVoice(await this.core.json("GET", `/voices/${pathId(voiceId)}`, options));
   }
 
   /** Create an empty `draft` voice. Give it a clip with {@link enroll}, or use {@link clone}. */
-  async create(params: CreateVoiceParams): Promise<Voice> {
-    return toVoice(await this.core.json("POST", "/voices", { json: defined({ ...params }) }));
+  async create(params: CreateVoiceParams, options: RequestOptions = {}): Promise<Voice> {
+    const json = defined({ ...params });
+    return toVoice(await this.core.json("POST", "/voices", { ...options, json }));
   }
 
   /** Change a voice's metadata. Only the fields you pass change. */
-  async update(voiceId: string, params: UpdateVoiceParams): Promise<Voice> {
+  async update(
+    voiceId: string,
+    params: UpdateVoiceParams,
+    options: RequestOptions = {},
+  ): Promise<Voice> {
     const json = defined({ ...params });
-    return toVoice(await this.core.json("PATCH", `/voices/${pathId(voiceId)}`, { json }));
+    return toVoice(
+      await this.core.json("PATCH", `/voices/${pathId(voiceId)}`, { ...options, json }),
+    );
   }
 
   /** Delete one of your voices. */
-  async delete(voiceId: string): Promise<void> {
-    await this.core.request("DELETE", `/voices/${pathId(voiceId)}`);
+  async delete(voiceId: string, options: RequestOptions = {}): Promise<void> {
+    await this.core.request("DELETE", `/voices/${pathId(voiceId)}`, options);
   }
 
   /** Create a voice from a reference clip. Returns at once with the voice in `processing` and a
    * `job_id`; see {@link waitUntilReady} or {@link cloneAndWait}. */
-  async clone(params: CloneVoiceParams): Promise<CloneResult> {
+  async clone(params: CloneVoiceParams, options: RequestOptions = {}): Promise<CloneResult> {
     const fields = {
       name: params.name,
       description: params.description,
@@ -153,15 +194,21 @@ export class Voices {
           : String(params.remove_background_noise),
     };
     const result = await this.core.json<CloneResult>("POST", "/voices/clone", {
+      ...options,
       form: form(fields, params.file),
     });
     return { ...result, voice: toVoice(result.voice) };
   }
 
   /** Clone a reference clip into an existing voice of yours. Returns at once. */
-  async enroll(voiceId: string, params: EnrollVoiceParams): Promise<CloneResult> {
+  async enroll(
+    voiceId: string,
+    params: EnrollVoiceParams,
+    options: RequestOptions = {},
+  ): Promise<CloneResult> {
     const fields = { ref_text: params.ref_text, language: params.language };
     const result = await this.core.json<CloneResult>("POST", `/voices/${pathId(voiceId)}/enroll`, {
+      ...options,
       form: form(fields, params.file),
     });
     return { ...result, voice: toVoice(result.voice) };

@@ -21,7 +21,7 @@ describe.runIf(enabled)("live", { timeout: 180_000 }, () => {
   let voice: ff.Voice;
 
   beforeAll(async () => {
-    for await (const v of await client.voices.list({ page_size: 100 })) {
+    for await (const v of client.voices.list({ page_size: 100 })) {
       if (ff.isReady(v)) {
         voice = v;
         return;

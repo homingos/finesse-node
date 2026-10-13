@@ -21,7 +21,7 @@ import { writeFile } from "node:fs/promises";
 const client = new Finesse(); // reads FINESSE_API_KEY
 
 let voiceId = "";
-for await (const v of await client.voices.list()) {
+for await (const v of client.voices.list()) {
   if (isReady(v)) {
     voiceId = v.id;
     break;
@@ -42,10 +42,22 @@ await writeFile("hello.wav", audio.data);
 Use `https://fi.development.flamapis.com` as `baseURL` for the development environment.
 Request and response fields use the API's own names (`voice_id`, `output_format`, ...).
 
+Every request method takes per-call overrides as its last argument:
+
+```ts
+await client.speech.create(
+  { voice_id, text: "Hello!" },
+  { timeout: 30_000, maxRetries: 0, headers: { "X-Request-Id": "abc" }, signal },
+);
+```
+
+`signal` (an `AbortSignal`) stops the request, its retries and any waiting. On `jobs.wait`,
+`voices.waitUntilReady` and `cloneAndWait`, `timeout` is the overall wait.
+
 ## Voices
 
 ```ts
-for await (const voice of await client.voices.list()) {
+for await (const voice of client.voices.list()) {
   console.log(voice.id, voice.name, voice.status, voice.labels); // walks every page
 }
 const voice = await client.voices.get("665f1a2b3c4d5e6f7a8b9c0d");
@@ -113,10 +125,6 @@ every context you start, or `cancel()` it.
 Node (with `ws`) and Bun send the API key as a header. Browsers and Deno cannot set headers on a
 WebSocket handshake, so there the key goes in the URL. The client refuses to run in a browser
 unless you pass `dangerouslyAllowBrowser: true`; call Finesse from your server instead.
-
-`speech.create`, `speech.stream`, `voices.get`, `jobs.get`, `jobs.wait` and
-`voices.waitUntilReady` / `cloneAndWait` take an optional `signal` (an `AbortSignal`) that stops
-the request, any retries, and any waiting.
 
 ## Errors
 

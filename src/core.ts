@@ -39,12 +39,23 @@ export interface ClientOptions {
   dangerouslyAllowBrowser?: boolean;
 }
 
+/** Per-call overrides that every request method accepts as its last argument. */
 export interface RequestOptions {
+  /** Abort the request, its retries and any waiting. Rejects with the signal's reason. */
+  signal?: AbortSignal;
+  /** Timeout in ms for this call (for streams, the longest wait between chunks). */
+  timeout?: number;
+  /** Retries for this call. */
+  maxRetries?: number;
+  /** Extra headers for this call; they override the client's. */
+  headers?: Record<string, string>;
+}
+
+interface CallOptions extends RequestOptions {
   query?: Record<string, string | number>;
   json?: unknown;
   form?: () => FormData;
   stream?: boolean;
-  signal?: AbortSignal;
 }
 
 function env(name: string): string | undefined {
@@ -113,11 +124,13 @@ export class Core {
   /** Send a request, retrying transient failures, and throw on an error status. With
    * `stream: true` the caller owns the response body. A caller `signal` stops the request and
    * any further retries, and rejects with the signal's reason. */
-  async request(method: string, path: string, opts: RequestOptions = {}): Promise<Response> {
+  async request(method: string, path: string, opts: CallOptions = {}): Promise<Response> {
     const { signal } = opts;
+    const timeout = opts.timeout ?? this.timeout;
+    const maxRetries = opts.maxRetries ?? this.maxRetries;
     for (let attempt = 0; ; attempt++) {
       throwIfAborted(signal);
-      const headers: Record<string, string> = { ...this.headers };
+      const headers: Record<string, string> = { ...this.headers, ...opts.headers };
       let body: BodyInit | undefined;
       if (opts.json !== undefined) {
         headers["Content-Type"] = "application/json";
@@ -126,7 +139,7 @@ export class Core {
         body = opts.form(); // rebuilt per attempt; fetch sets the multipart boundary
       }
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(new TimeoutSignal()), this.timeout);
+      const timer = setTimeout(() => controller.abort(new TimeoutSignal()), timeout);
       const onAbort = () => controller.abort(signal?.reason);
       signal?.addEventListener("abort", onAbort, { once: true });
       const release = () => {
@@ -138,7 +151,7 @@ export class Core {
         throwIfAborted(signal);
         const timedOut = controller.signal.reason instanceof TimeoutSignal;
         const retry = method !== "POST" || (!sent && !timedOut && isUnsent(err));
-        if (attempt < this.maxRetries && retry) {
+        if (attempt < maxRetries && retry) {
           await sleep(retryDelay(attempt, null), signal);
           return;
         }
@@ -187,7 +200,7 @@ export class Core {
       const text = new TextDecoder().decode(buffer);
 
       const statuses = method === "POST" ? POST_RETRY_STATUSES : RETRY_STATUSES;
-      if (attempt < this.maxRetries && statuses.has(response.status)) {
+      if (attempt < maxRetries && statuses.has(response.status)) {
         await sleep(retryDelay(attempt, response), signal);
         continue;
       }
@@ -196,7 +209,7 @@ export class Core {
   }
 
   /** Request and decode a JSON success body, stripping the `{status, error, data}` envelope. */
-  async json<T>(method: string, path: string, opts: RequestOptions = {}): Promise<T> {
+  async json<T>(method: string, path: string, opts: CallOptions = {}): Promise<T> {
     const response = await this.request(method, path, opts);
     return unwrap(await response.json()) as T;
   }

@@ -1,4 +1,4 @@
-import { pathId, sleep, type Core } from "../core.js";
+import { pathId, sleep, type Core, type RequestOptions } from "../core.js";
 import { CloneFailedError, CloneTimeoutError } from "../errors.js";
 import type { CloneJob } from "../types.js";
 
@@ -23,8 +23,8 @@ const FINISHED = new Set(["succeeded", "failed", "cancelled", "expired"]);
 export class Jobs {
   constructor(private readonly core: Core) {}
 
-  get(jobId: string, options: { signal?: AbortSignal } = {}): Promise<CloneJob> {
-    return this.core.json<CloneJob>("GET", `/jobs/${pathId(jobId)}`, { signal: options.signal });
+  get(jobId: string, options: RequestOptions = {}): Promise<CloneJob> {
+    return this.core.json<CloneJob>("GET", `/jobs/${pathId(jobId)}`, options);
   }
 
   /** Poll until the job finishes and return it. Throws {@link CloneFailedError} if it ends

@@ -4,7 +4,7 @@ import { Finesse, isReady } from "../src/index.js";
 
 const client = new Finesse();
 let voiceId = "";
-for await (const v of await client.voices.list()) {
+for await (const v of client.voices.list()) {
   if (isReady(v)) {
     voiceId = v.id;
     break;

@@ -1,5 +1,5 @@
 export { Finesse } from "./client.js";
-export type { ClientOptions } from "./core.js";
+export type { ClientOptions, RequestOptions } from "./core.js";
 export {
   FinesseError,
   APIConnectionError,
@@ -31,7 +31,7 @@ export {
   type ContextOptions,
   type ConnectOptions,
 } from "./realtime.js";
-export { VoicePage } from "./resources/voices.js";
+export { VoicePage, VoicePagePromise } from "./resources/voices.js";
 export type {
   ListVoicesParams,
   CreateVoiceParams,
