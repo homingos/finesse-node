@@ -1,5 +1,6 @@
 export { Finesse } from "./client.js";
-export type { ClientOptions, RequestOptions } from "./core.js";
+export type { ClientOptions, RequestOptions, LogLevel, Logger } from "./core.js";
+export type { RawResponse, RawClient } from "./raw.js";
 export {
   FinesseError,
   APIConnectionError,

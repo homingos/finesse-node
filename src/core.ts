@@ -37,6 +37,18 @@ export interface ClientOptions {
   /** Allow running in a browser. Your API key would be visible to anyone using the page, so
    * only do this for internal tools. */
   dangerouslyAllowBrowser?: boolean;
+  /** Log requests and retries: `"debug"`, `"info"` or `"off"`. Defaults to `FINESSE_LOG`, then
+   * `"off"`. The API key, bodies and audio are never logged. */
+  logLevel?: LogLevel;
+  /** Where log lines go. Defaults to `console`. */
+  logger?: Logger;
+}
+
+export type LogLevel = "debug" | "info" | "off";
+
+export interface Logger {
+  debug(message: string): void;
+  info(message: string): void;
 }
 
 /** Per-call overrides that every request method accepts as its last argument. */
@@ -77,6 +89,10 @@ export class Core {
   readonly maxRetries: number;
   readonly headers: Record<string, string>;
   readonly fetch: Fetch;
+  readonly logLevel: LogLevel;
+  readonly logger: Logger;
+  /** @internal Called with each successful response (used by `withRawResponse`). */
+  onResponse: ((response: Response) => void) | null = null;
 
   constructor(options: ClientOptions = {}) {
     const apiKey = options.apiKey ?? env("FINESSE_API_KEY");
@@ -109,6 +125,32 @@ export class Core {
     if (!f)
       throw new FinesseError("No fetch available. Pass { fetch } (Node 18+ has one built in).");
     this.fetch = f.bind(globalThis);
+    const level = (options.logLevel ?? env("FINESSE_LOG")?.toLowerCase() ?? "off") as LogLevel;
+    this.logLevel = level === "debug" || level === "info" ? level : "off";
+    this.logger = options.logger ?? console;
+  }
+
+  /** @internal A view of this core with other defaults, sharing everything else. */
+  withOptions(overrides: {
+    timeout?: number;
+    maxRetries?: number;
+    headers?: Record<string, string>;
+  }): Core {
+    const view = Object.create(Object.getPrototypeOf(this)) as Core;
+    Object.assign(view, this, {
+      timeout: overrides.timeout ?? this.timeout,
+      maxRetries: overrides.maxRetries ?? this.maxRetries,
+      headers: { ...this.headers, ...overrides.headers },
+    });
+    return view;
+  }
+
+  private debug(message: string): void {
+    if (this.logLevel === "debug") this.logger.debug(`[finesse] ${message}`);
+  }
+
+  private info(message: string): void {
+    if (this.logLevel !== "off") this.logger.info(`[finesse] ${message}`);
   }
 
   url(path: string, query?: Record<string, string | number>): string {
@@ -159,9 +201,12 @@ export class Core {
         throw new APIConnectionError(errorMessage(err), { cause: err });
       };
 
+      const url = this.url(path, opts.query);
+      const where = `${method} ${url.split("?")[0]}`;
+      const started = Date.now();
       let response: Response;
       try {
-        response = await this.fetch(this.url(path, opts.query), {
+        response = await this.fetch(url, {
           method,
           headers,
           body,
@@ -170,14 +215,21 @@ export class Core {
       } catch (err) {
         release();
         await retryAfterError(err, false);
+        this.info(`retrying ${where} (attempt ${attempt + 1} failed: ${errorMessage(err)})`);
         continue;
       }
+      this.debug(
+        `${where} -> ${response.status} in ${Date.now() - started} ms` +
+          (attempt ? `, attempt ${attempt + 1}` : "") +
+          ` (request id ${response.headers.get("x-request-id") ?? "-"})`,
+      );
 
       if (response.ok && opts.stream) {
         // From here the stream reader applies the timeout between chunks instead, so a long
         // stream is not cut off. The caller's signal still aborts it until it is released.
         clearTimeout(timer);
         streamCleanups.set(response, () => signal?.removeEventListener("abort", onAbort));
+        this.onResponse?.(response);
         return response;
       }
       // Read the whole body while the timeout still applies.
@@ -187,21 +239,28 @@ export class Core {
       } catch (err) {
         release();
         await retryAfterError(err, true);
+        this.info(`retrying ${where} (attempt ${attempt + 1} failed: ${errorMessage(err)})`);
         continue;
       }
       release();
       if (response.ok) {
         const empty = response.status === 204 || response.status === 205 || response.status === 304;
-        return new Response(empty ? null : buffer, {
+        const buffered = new Response(empty ? null : buffer, {
           status: response.status,
           headers: response.headers,
         });
+        this.onResponse?.(buffered);
+        return buffered;
       }
       const text = new TextDecoder().decode(buffer);
 
       const statuses = method === "POST" ? POST_RETRY_STATUSES : RETRY_STATUSES;
       if (attempt < maxRetries && statuses.has(response.status)) {
-        await sleep(retryDelay(attempt, response), signal);
+        const delay = retryDelay(attempt, response);
+        this.info(
+          `retrying ${where} in ${Math.round(delay)} ms (attempt ${attempt + 1} failed: HTTP ${response.status})`,
+        );
+        await sleep(delay, signal);
         continue;
       }
       throw makeStatusError(response.status, text, response.headers, response.statusText);
