@@ -1,4 +1,6 @@
-/** Response shapes. Field names match the API (snake_case); timestamps are Unix milliseconds. */
+/** Response shapes. Field names match the API (snake_case); timestamps are Unix milliseconds.
+ * Media URLs (`original_audio_url`, `sample_audio_url`, `avatar_url`, `audio_url`) may be
+ * short-lived signed URLs: download them promptly, or fetch the object again for a fresh one. */
 
 export interface VoiceSettings {
   stability?: number;
@@ -33,7 +35,6 @@ export interface Voice {
   /** Labels as a plain object (the API sends `[{key, value}]`; the SDK converts it). */
   labels: Record<string, string>;
   settings?: VoiceSettings;
-  metadata?: Record<string, unknown>;
   external_ref?: string;
   original_audio_url?: string;
   sample_audio_url?: string;
@@ -43,7 +44,8 @@ export interface Voice {
   updated_at?: number;
   last_used_at?: number;
   expires_at?: number;
-  deleted_at?: number;
+  /** Prefix of the API key that created the voice; only on your own voices. */
+  created_via_key_prefix?: string;
   [key: string]: unknown;
 }
 
@@ -60,7 +62,6 @@ export interface CloneJob {
   attempts: number;
   /** Failure detail, `{message, status_code}`. */
   error?: Record<string, unknown> | null;
-  result?: Record<string, unknown> | null;
   started_at?: number;
   finished_at?: number;
   created_at?: number;
@@ -81,6 +82,7 @@ export interface Audio {
   sampleRate: number | null;
   /** Id of the generation history record (when object storage is enabled). */
   generationId: string | null;
+  /** The stored clip, when object storage is enabled; may be a short-lived signed URL. */
   audioURL: string | null;
   billingRemaining: number | null;
 }
@@ -121,9 +123,9 @@ export interface SpeechParams {
   text: string;
   language?: string;
   output_format?: OutputFormat;
-  /** Output rate in Hz. The native rate is 24000; lower values still return 24000. */
+  /** Output rate in Hz, 8000-48000. The native rate is 24000; lower values still return 24000. */
   sample_rate?: number;
-  /** Generation steps (default 32); fewer is faster, more is higher quality. */
+  /** Generation steps, 1-32 (default and maximum 32; over 32 is a 400); fewer is faster. */
   num_step?: number;
 }
 

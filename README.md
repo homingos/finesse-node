@@ -185,14 +185,14 @@ const audio = await client.speech.create({
   text: "The quick brown fox jumps over the lazy dog.",
   language: "en", // optional; defaults to the voice's language
   output_format: "wav", // default; or raw PCM: "s16le", "s24le", "s32le", "f32le", "f64le"
-  num_step: 32, // optional; fewer steps is faster, more is higher quality
+  num_step: 32, // optional; 1-32, default 32; fewer steps is faster
 });
 
 audio.data; // Uint8Array
 audio.contentType; // "audio/wav"
 audio.sampleRate; // 24000
 audio.generationId; // id of this clip in your generation history
-audio.audioURL; // stored copy of the clip, when storage is enabled
+audio.audioURL; // stored copy of the clip, when storage is enabled (may be short-lived)
 ```
 
 Identical requests are served from a cache at no charge. Speech is billed per character of
@@ -369,14 +369,14 @@ try {
 | --------------------------------------- | ------ | --------------------------------------------------------------------------------------------------------------- |
 | `BadRequestError`                       | 400    | Invalid input, text over 10,000 characters, voice not enrolled                                                  |
 | `AuthenticationError`                   | 401    | Missing, unknown or revoked key; `key_expired`; `token_invalid`                                                 |
-| `PaymentRequiredError`                  | 402    | `insufficient_credits` or `quota_exhausted`                                                                     |
+| `PaymentRequiredError`                  | 402    | `insufficient_credits`, `quota_exhausted` or `payment_required`                                                 |
 | `PermissionDeniedError`                 | 403    | `insufficient_scope`, `voice_not_allowed` (token), `feature_disabled`, or `plan_limit_reached` (see `.feature`) |
 | `NotFoundError`                         | 404    | No such voice or job, or not visible to your workspace                                                          |
 | `ConflictError`                         | 409    | A request with the same `Idempotency-Key` is still running                                                      |
 | `PayloadTooLargeError`                  | 413    | Request body over 21 MiB                                                                                        |
 | `UnprocessableEntityError`              | 422    | `invalid_input`, or `idempotency_key_reused`                                                                    |
 | `RateLimitError`                        | 429    | `rate_limited` / `concurrency_limited` (see `retryAfter`), or `too_many_sessions`                               |
-| `InternalServerError`                   | 5xx    | `upstream_error` (502) or `upstream_busy` (503, see `retryAfter`): retry                                        |
+| `InternalServerError`                   | 5xx    | `upstream_error` (502), `upstream_busy` / `unavailable` (503, see `retryAfter`) or `internal_error`: retry      |
 | `APIConnectionError`                    |        | No response; `APITimeoutError` when it timed out                                                                |
 | `StreamError`                           |        | A speech stream failed after it started                                                                         |
 | `RealtimeError`                         |        | A realtime context or session failed                                                                            |
@@ -399,6 +399,10 @@ yourself, pass `{ headers: { "Idempotency-Key": "..." } }`.
 `speech.stream` has no key, so it is only retried when the server certainly did no work: the
 connection never opened, 429, 502 or 503. These are also the rules for keyed calls until the
 service confirms it honours keys.
+
+With an `accessToken`, only a `429` or a connection that never opened is retried. The service
+spends the token just before running the request, so a retry after anything later would only
+get `token_invalid`; the original error is thrown instead.
 
 ```ts
 const client = new Finesse({ maxRetries: 5 }); // every request
@@ -528,17 +532,18 @@ const client = new Finesse({ defaultHeaders: { "X-Finesse-Client": "my-app/1.0.0
 
 ## Runtimes
 
-| Runtime  | HTTP               | Realtime                                                  |
-| -------- | ------------------ | --------------------------------------------------------- |
-| Node 18+ | built-in `fetch`   | needs `ws`; the API key goes in a header                  |
-| Bun      | built-in           | built-in `WebSocket`; the API key goes in a header        |
-| Deno     | built-in           | built-in `WebSocket`; use a token (a key goes in the URL) |
-| Browsers | with `accessToken` | built-in `WebSocket`; the token is a subprotocol          |
+| Runtime  | HTTP               | Realtime                                                |
+| -------- | ------------------ | ------------------------------------------------------- |
+| Node 18+ | built-in `fetch`   | needs `ws`; the API key goes in a header                |
+| Bun      | built-in           | built-in `WebSocket`; the API key goes in a header      |
+| Deno     | built-in           | built-in `WebSocket`; from 2.5 the key goes in a header |
+| Browsers | with `accessToken` | built-in `WebSocket`; the token is a subprotocol        |
 
 Browsers can't keep an API key secret, so a client holding a key refuses to run in one. Use a
 [short-lived token](#browsers-and-short-lived-tokens) instead. For internal tools only,
 `new Finesse({ dangerouslyAllowBrowser: true })` lifts this; realtime then sends the key in a
-deprecated URL parameter, because browsers can't set WebSocket headers.
+deprecated URL parameter, because browsers can't set WebSocket headers (as does Deno before
+2.5), and logs a warning once.
 
 ## Examples
 
