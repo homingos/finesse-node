@@ -14,6 +14,9 @@ const RETRY_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
 // 429, 502 (engine unavailable or warming up; failed synthesis is refunded) and 503, or when
 // the connection never opened. A timeout after the request was sent is not retried.
 const POST_RETRY_STATUSES = new Set([429, 502, 503]);
+// A short-lived token is spent just before the handler runs, so any later failure leaves it
+// used and a retry would only get 401 token_invalid. Only 429 is refused before the spend.
+const TOKEN_RETRY_STATUSES = new Set([429]);
 const UNSENT_CODES = new Set(["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "UND_ERR_CONNECT_TIMEOUT"]);
 const MAX_BACKOFF_MS = 8_000;
 
@@ -32,7 +35,8 @@ export interface ClientOptions {
   timeout?: number;
   /** Retries for transient failures. Default 2. Reads, updates and deletes retry on network
    * errors, timeouts, 408, 429 and 5xx. Creates, uploads and synthesis retry only when the
-   * server did no work: the connection never opened, 429, 502 or 503. */
+   * server did no work: the connection never opened, 429, 502 or 503. With an `accessToken`
+   * only 429 and a connection that never opened are retried, since the token is single use. */
   maxRetries?: number;
   /** Extra headers sent on every request. */
   defaultHeaders?: Record<string, string>;
@@ -226,7 +230,8 @@ export class Core {
       const retryAfterError = async (err: unknown, sent: boolean): Promise<void> => {
         throwIfAborted(signal);
         const timedOut = controller.signal.reason instanceof TimeoutSignal;
-        const retry = retryAs(null) !== "POST" || (!sent && !timedOut && isUnsent(err));
+        const cautious = this.accessToken !== null || retryAs(null) === "POST";
+        const retry = !cautious || (!sent && !timedOut && isUnsent(err));
         if (attempt < maxRetries && retry) {
           await sleep(retryDelay(attempt, null), signal);
           return;
@@ -301,7 +306,12 @@ export class Core {
           continue;
         }
       }
-      const statuses = retryAs(response) === "POST" ? POST_RETRY_STATUSES : RETRY_STATUSES;
+      const statuses =
+        this.accessToken !== null
+          ? TOKEN_RETRY_STATUSES
+          : retryAs(response) === "POST"
+            ? POST_RETRY_STATUSES
+            : RETRY_STATUSES;
       if (attempt < maxRetries && statuses.has(response.status)) {
         const delay = retryDelay(attempt, response);
         this.info(
