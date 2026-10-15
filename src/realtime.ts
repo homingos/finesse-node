@@ -653,7 +653,7 @@ export class RealtimeSession {
     } else {
       // No handshake headers here (browsers, Deno before 2.5): the service also accepts the key
       // and the client name as query parameters, but marks that deprecated.
-      warnQueryKey(this.core.logger);
+      if (this.core.logLevel !== "off") warnQueryKey(this.core.logger);
       const u = new URL(url);
       u.searchParams.set("api_key", this.core.apiKey ?? "");
       u.searchParams.set("client", this.core.headers["X-Finesse-Client"] ?? "");
@@ -822,7 +822,7 @@ export class Realtime {
 
 const warnedLoggers = new WeakSet<Logger>();
 
-/** Logged once per logger, whatever the log level: the key in the URL is deprecated. */
+/** Logged once per logger unless logging is off: the key in the URL is deprecated. */
 function warnQueryKey(logger: Logger): void {
   if (warnedLoggers.has(logger)) return;
   warnedLoggers.add(logger);

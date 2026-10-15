@@ -759,12 +759,21 @@ describe("realtime", () => {
       );
     });
 
-    it("warns once about a key in the URL, whatever the log level", async () => {
+    it("warns once about a key in the URL when logging is on", async () => {
       const { Fake } = fakeWebSocket();
       vi.stubGlobal("WebSocket", Fake);
       vi.stubGlobal("Deno", { version: { deno: "2.4.5" } });
+      const quiet = { debug: vi.fn(), info: vi.fn() };
+      const off = new ff.Finesse({ apiKey: "flv_k", baseURL: "https://x.test", logger: quiet });
+      await expect(off.realtime.connect()).rejects.toThrow("fake socket");
+      expect(quiet.info).not.toHaveBeenCalled();
       const logger = { debug: vi.fn(), info: vi.fn() };
-      const client = new ff.Finesse({ apiKey: "flv_k", baseURL: "https://x.test", logger });
+      const client = new ff.Finesse({
+        apiKey: "flv_k",
+        baseURL: "https://x.test",
+        logger,
+        logLevel: "info",
+      });
       await expect(client.realtime.connect()).rejects.toThrow("fake socket");
       await expect(client.realtime.connect()).rejects.toThrow("fake socket");
       expect(logger.info).toHaveBeenCalledTimes(1);
