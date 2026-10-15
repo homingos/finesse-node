@@ -39,11 +39,12 @@ export class APIStatusError extends FinesseError {
   /** HTTP status. */
   readonly status: number;
   /** Machine-readable code. Branch on this, never on the message. Envelope codes:
-   * `invalid_request`, `unauthorized`, `key_expired`, `token_invalid`, `insufficient_scope`,
-   * `voice_not_allowed`, `not_found`, `payload_too_large`, `invalid_input`, `rate_limited`,
-   * `concurrency_limited`, `upstream_error`, `upstream_busy`, ...; plan denials:
-   * `insufficient_credits`, `quota_exhausted`, `feature_disabled`, `plan_limit_reached`;
-   * realtime: `too_many_sessions`. `null` when absent. */
+   * `invalid_request`, `unauthorized`, `key_expired`, `token_invalid`, `payment_required`,
+   * `forbidden`, `insufficient_scope`, `voice_not_allowed`, `not_found`, `conflict`,
+   * `idempotency_in_progress`, `payload_too_large`, `invalid_input`, `idempotency_key_reused`,
+   * `rate_limited`, `concurrency_limited`, `internal_error`, `upstream_error`, `upstream_busy`,
+   * `unavailable`; plan denials: `insufficient_credits`, `quota_exhausted`, `feature_disabled`,
+   * `plan_limit_reached`; realtime: `too_many_sessions`. `null` when absent. */
   readonly code: string | null;
   /** The decoded JSON body, or the raw text when it is not JSON. */
   readonly body: unknown;
@@ -95,7 +96,8 @@ export class BadRequestError extends APIStatusError {}
 /** 401: the API key is missing, unknown or revoked; `key_expired`; or a short-lived token is
  * invalid, expired or already used (`token_invalid`). */
 export class AuthenticationError extends APIStatusError {}
-/** 402: out of credits (`insufficient_credits`) or quota (`quota_exhausted`). */
+/** 402: out of credits (`insufficient_credits`) or quota (`quota_exhausted`), or another
+ * payment problem (`payment_required`). */
 export class PaymentRequiredError extends APIStatusError {}
 /** 403: the key lacks the route's scope (`insufficient_scope`), a token is limited to other
  * voices (`voice_not_allowed`), the plan lacks the feature (`feature_disabled`), or a cap is
@@ -189,7 +191,8 @@ export function makeStatusError(
       if (/^[a-z]+(_[a-z]+)+$/.test(b.message)) code = b.message;
     }
     if (typeof b.code === "string" && b.code) {
-      code = b.code;
+      // It also sends the generic `payment_required` code; keep the specific one.
+      if (!(status === 402 && b.message === "insufficient_credits")) code = b.code;
     } else if (typeof b.error === "string" && b.error) {
       code = b.error === "plan limit reached" ? "plan_limit_reached" : b.error;
       message ??= b.error.replace(/_/g, " ");

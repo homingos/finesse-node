@@ -46,6 +46,24 @@ describe("errors", () => {
     expect(e2.code).toBeNull();
   });
 
+  it("prefers insufficient_credits over payment_required on a 402", async () => {
+    const credits = { status: 402, error: true, message: "insufficient_credits" };
+    const m = mock(
+      jsonResponse(402, { ...credits, code: "payment_required" }),
+      jsonResponse(402, {
+        status: 402,
+        error: true,
+        message: "card declined",
+        code: "payment_required",
+      }),
+    );
+    const e = await m.client.speech.create({ voice_id: VOICE.id, text: "hi" }).catch((x) => x);
+    expect(e).toBeInstanceOf(ff.PaymentRequiredError);
+    expect(e.code).toBe("insufficient_credits");
+    const e2 = await m.client.speech.create({ voice_id: VOICE.id, text: "hi" }).catch((x) => x);
+    expect(e2.code).toBe("payment_required");
+  });
+
   it("reads plan limits", async () => {
     const m = mock(
       jsonResponse(403, { error: "plan limit reached", feature: "max_voices", limit: 3 }),

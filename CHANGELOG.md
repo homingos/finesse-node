@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.1.1 (unreleased)
+
+- Token clients (`accessToken`) retry only `429` and connections that never opened. The
+  service spends the token before running the request, so retrying a later `5xx` or dropped
+  connection only got `401 token_invalid` and hid the real error.
+- A `402` from the credit check inside synthesis has `code === "insufficient_credits"` again,
+  not the generic `payment_required`. `code` documents every code the API returns.
+- Realtime: text that would make a frame larger than 1 MiB is split across `task_continue`
+  frames (never inside a character), instead of the service closing the socket with `1009`.
+- Realtime: Deno 2.5+ sends the API key as a header. Where the key still goes in the
+  deprecated `?api_key=` parameter (browsers, older Deno), the SDK logs a warning once.
+- Types: `Voice` drops `metadata` and `deleted_at`, `CloneJob` drops `result` (the API no longer
+  returns them); `Voice` gains `created_via_key_prefix`.
+- Docs: `num_step` is 1-32, `sample_rate` 8000-48000, clone clips at least 10 s, `ref_text` at
+  most 4000 characters, and media URLs may be short-lived signed URLs.
+
 ## 0.1.0 (unreleased)
 
 - Voices, cloning with job waiting, one-shot and streamed speech.

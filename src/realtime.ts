@@ -12,22 +12,24 @@
  * ```
  *
  * In Node this needs the `ws` package (`npm i ws`), which sends the API key as a header. Bun's
- * built-in WebSocket does too.
+ * built-in WebSocket does too, and so does Deno's from 2.5.
  *
  * In a browser, never use the API key: mint a short-lived token on your server
  * (`tokens.create`) and connect with `{ accessToken }` or `{ getAccessToken }`. The token rides
  * in the WebSocket subprotocol list (`["finesse.v1", token]`), the one place a browser can put
- * a credential on a handshake. (With a key, Deno and browsers fall back to a deprecated URL
- * parameter.)
+ * a credential on a handshake. (With a key, browsers and Deno before 2.5 fall back to a
+ * deprecated URL parameter, and the SDK logs a warning once.)
  */
 
-import { API_PREFIX, isBrowser, type Core } from "./core.js";
+import { API_PREFIX, isBrowser, type Core, type Logger } from "./core.js";
 import { APIConnectionError, APITimeoutError, FinesseError, makeStatusError } from "./errors.js";
 
 export const DEFAULT_OPEN_TIMEOUT_MS = 60_000;
 /** The protocol the service selects. A short-lived token travels as a second subprotocol. */
 export const SUBPROTOCOL = "finesse.v1";
 const CLOSE_TIMEOUT_MS = 5_000;
+/** The service closes the socket (1009) on a client frame over 1 MiB, ending every context. */
+export const MAX_FRAME_BYTES = 1 << 20;
 
 // Going Away, abnormal closure, internal error, service restart, try again later, engine busy.
 const RETRYABLE_CLOSES = new Set([1001, 1006, 1011, 1012, 1013, 4429]);
@@ -178,8 +180,10 @@ export interface ContextOptions {
   language?: string;
   /** `s16le` (default), `s24le`, `s32le`, `f32le`, `f64le` or `opus`. */
   output_format?: "s16le" | "s24le" | "s32le" | "f32le" | "f64le" | "opus";
-  /** Output rate in Hz; the native rate is 24000 and lower values still produce 24000. */
+  /** Output rate in Hz, 8000-48000; the native rate is 24000 and lower values still produce
+   * 24000. */
   sample_rate?: number;
+  /** Generation steps, 1-32 (default 32); fewer is faster. Values over 32 are capped. */
   num_step?: number;
   guidance_scale?: number;
   /** Speaking rate. */
@@ -263,7 +267,7 @@ export class RealtimeContext implements AsyncIterable<RealtimeEvent> {
           throw err;
         }
       } else {
-        this.session._send({ type: "task_continue", context_id: this.id, text, finalize });
+        this.session._sendText({ type: "task_continue", context_id: this.id }, text, finalize);
       }
       if (finalize) this.finished = true;
     });
@@ -406,11 +410,19 @@ function globalDialer(headers: boolean): Dialer {
   };
 }
 
+/** Deno's WebSocket takes handshake headers from 2.5; older versions reject the option. */
+function denoHasHeaders(version: string | undefined): boolean {
+  const [major = 0, minor = 0] = (version ?? "").split(".").map(Number);
+  return major > 2 || (major === 2 && minor >= 5);
+}
+
 async function defaultDialer(): Promise<Dialer> {
   if (isBrowser()) return globalDialer(false); // browsers cannot set handshake headers
   const v = versions();
   if (v.bun) return globalDialer(true);
-  if ((globalThis as { Deno?: unknown }).Deno || !v.node) return globalDialer(false);
+  const deno = (globalThis as { Deno?: { version?: { deno?: string } } }).Deno;
+  if (deno) return globalDialer(denoHasHeaders(deno.version?.deno));
+  if (!v.node) return globalDialer(false);
   let mod: { default?: unknown; WebSocket?: unknown };
   try {
     mod = (await import("ws")) as typeof mod;
@@ -539,7 +551,7 @@ export class RealtimeSession {
     this.contexts.set(ctx.id, ctx);
     ctx.socket = this.ws;
     try {
-      this._send({ type: "task_start", context_id: ctx.id, ...ctx.options, text, finalize });
+      this._sendText({ type: "task_start", context_id: ctx.id, ...ctx.options }, text, finalize);
     } catch (err) {
       this.contexts.delete(ctx.id);
       throw err;
@@ -552,6 +564,32 @@ export class RealtimeSession {
       throw this.error ?? new RealtimeError("connection_closed", "The session is not open.");
     }
     this.ws.send(JSON.stringify(msg));
+  }
+
+  /** @internal Send a `task_start` / `task_continue` frame with `text`. Text that would make
+   * the frame larger than {@link MAX_FRAME_BYTES} is split across `task_continue` frames for
+   * the same context; only the last one carries `finalize`. */
+  _sendText(msg: Record<string, unknown>, text: string, finalize: boolean): void {
+    const frame = { ...msg, text, finalize };
+    const json = JSON.stringify(frame);
+    // Each UTF-16 unit is at most 3 bytes of UTF-8, so most frames need no encoding to check.
+    if (json.length * 3 <= MAX_FRAME_BYTES || utf8Bytes(json) <= MAX_FRAME_BYTES) {
+      this._send(frame);
+      return;
+    }
+    const next = { type: "task_continue", context_id: msg.context_id };
+    const overhead = Math.max(
+      utf8Bytes(JSON.stringify({ ...msg, text: "", finalize: false })),
+      utf8Bytes(JSON.stringify({ ...next, text: "", finalize: false })),
+    );
+    const pieces = splitText(text, MAX_FRAME_BYTES - overhead);
+    pieces.forEach((piece, i) =>
+      this._send({
+        ...(i ? next : msg),
+        text: piece,
+        finalize: finalize && i === pieces.length - 1,
+      }),
+    );
   }
 
   /** @internal */
@@ -613,8 +651,9 @@ export class RealtimeSession {
       headers = { ...this.core.headers };
       delete headers.Accept;
     } else {
-      // No handshake headers here (browsers, Deno): the service also accepts the key and
-      // the client name as query parameters.
+      // No handshake headers here (browsers, Deno before 2.5): the service also accepts the key
+      // and the client name as query parameters, but marks that deprecated.
+      if (this.core.logLevel !== "off") warnQueryKey(this.core.logger);
       const u = new URL(url);
       u.searchParams.set("api_key", this.core.apiKey ?? "");
       u.searchParams.set("client", this.core.headers["X-Finesse-Client"] ?? "");
@@ -779,6 +818,55 @@ export class Realtime {
   session(options: ConnectOptions = {}): RealtimeSession {
     return new RealtimeSession(this.core, options);
   }
+}
+
+const warnedLoggers = new WeakSet<Logger>();
+
+/** Logged once per logger unless logging is off: the key in the URL is deprecated. */
+function warnQueryKey(logger: Logger): void {
+  if (warnedLoggers.has(logger)) return;
+  warnedLoggers.add(logger);
+  logger.info(
+    "[finesse] This runtime cannot send WebSocket headers, so the API key goes in the URL " +
+      "(?api_key=), which the service has deprecated. Mint a short-lived token on your server " +
+      "(tokens.create) and connect with { accessToken } or { getAccessToken } instead.",
+  );
+}
+
+function utf8Bytes(s: string): number {
+  return new TextEncoder().encode(s).length;
+}
+
+/** Split `text` into pieces of at most `budget` bytes once JSON-escaped and UTF-8 encoded,
+ * never inside a code point or a surrogate pair. Every piece holds at least one code point. */
+export function splitText(text: string, budget: number): string[] {
+  const pieces: string[] = [];
+  let start = 0;
+  let size = 0;
+  for (let i = 0; i < text.length;) {
+    const c = text.charCodeAt(i);
+    const pair = c >= 0xd800 && c <= 0xdbff && (text.charCodeAt(i + 1) & 0xfc00) === 0xdc00 ? 2 : 1;
+    const bytes = pair === 2 ? 4 : escapedBytes(c);
+    if (size + bytes > budget && i > start) {
+      pieces.push(text.slice(start, i));
+      start = i;
+      size = 0;
+    }
+    size += bytes;
+    i += pair;
+  }
+  pieces.push(text.slice(start));
+  return pieces;
+}
+
+/** UTF-8 bytes of one UTF-16 unit as `JSON.stringify` writes it (surrogate pairs aside). */
+function escapedBytes(c: number): number {
+  if (c === 0x22 || c === 0x5c) return 2; // \" and \\
+  if (c < 0x20) return c === 8 || c === 9 || c === 10 || c === 12 || c === 13 ? 2 : 6;
+  if (c < 0x80) return 1;
+  if (c < 0x800) return 2;
+  if (c >= 0xd800 && c <= 0xdfff) return 6; // a lone surrogate is escaped as \uXXXX
+  return 3;
 }
 
 function randomId(): string {

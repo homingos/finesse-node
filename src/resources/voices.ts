@@ -35,18 +35,20 @@ export interface ConsentParams {
 
 export interface CloneVoiceParams extends ConsentParams {
   name: string;
-  /** Reference clip, at most 20 MiB; 10-30 s of clear speech works best. */
+  /** Reference clip, at most 20 MiB: at least 10 s of clear speech (10-30 s works best). */
   file: FileInput;
   description?: string;
   language?: string;
   labels?: Record<string, string>;
-  /** Transcript of the reference clip. */
+  /** Transcript of the reference clip, at most 4000 characters. */
   ref_text?: string;
   remove_background_noise?: boolean;
 }
 
 export interface EnrollVoiceParams extends ConsentParams {
+  /** Reference clip, at most 20 MiB: at least 10 s of clear speech (10-30 s works best). */
   file: FileInput;
+  /** Transcript of the reference clip, at most 4000 characters. */
   ref_text?: string;
   language?: string;
 }

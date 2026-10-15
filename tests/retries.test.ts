@@ -301,3 +301,51 @@ describe("servers that don't honour keys", () => {
     expect(m.requests).toHaveLength(3);
   });
 });
+
+describe("short-lived tokens", () => {
+  // The server spends the token just before the handler, so only failures before that point
+  // can be retried; anything later would come back as 401 token_invalid.
+  const tokenClient = (m: ReturnType<typeof mock>, opts: Record<string, unknown> = {}) =>
+    m.make({ apiKey: undefined, accessToken: "fin_tok_abc", ...opts });
+
+  it("retries 429 and connections that never opened", async () => {
+    const m = mock(error(429, "slow"), netError("ECONNREFUSED"), ok());
+    await tokenClient(m).speech.create({ voice_id: VOICE.id, text: "hi" });
+    expect(m.requests).toHaveLength(3);
+  });
+
+  it.each([500, 502, 503, 504])("throws %i as-is", async (status) => {
+    const m = mock(echo(error(status, "upstream")), ok());
+    const e = await tokenClient(m)
+      .speech.create({ voice_id: VOICE.id, text: "hi" })
+      .catch((x) => x);
+    expect(e).toBeInstanceOf(ff.InternalServerError);
+    expect(e.status).toBe(status);
+    expect(m.requests).toHaveLength(1);
+  });
+
+  it("does not retry a stream after a 5xx, even once keys are honoured", async () => {
+    const m = mock(echo(ok()), echo(error(502, "upstream")), ok());
+    const c = tokenClient(m);
+    await c.speech.create({ voice_id: VOICE.id, text: "a" }); // teaches the client keys work
+    const e = await (async () => {
+      for await (const _ of c.speech.stream({ voice_id: VOICE.id, text: "b" })) void _;
+    })().catch((x) => x);
+    expect(e).toBeInstanceOf(ff.InternalServerError);
+    expect(m.requests).toHaveLength(2);
+  });
+
+  it("does not retry errors after the request was sent", async () => {
+    const m = mock(netError("ECONNRESET"), ok());
+    await expect(
+      tokenClient(m).speech.create({ voice_id: VOICE.id, text: "hi" }),
+    ).rejects.toBeInstanceOf(ff.APIConnectionError);
+    expect(m.requests).toHaveLength(1);
+    const hang = () => new Promise<Response>(() => undefined);
+    const m2 = mock(hang, ok());
+    await expect(
+      tokenClient(m2, { timeout: 10 }).speech.create({ voice_id: VOICE.id, text: "hi" }),
+    ).rejects.toBeInstanceOf(ff.APITimeoutError);
+    expect(m2.requests).toHaveLength(1);
+  });
+});

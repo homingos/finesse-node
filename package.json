@@ -1,6 +1,6 @@
 {
   "name": "@flam/finesse",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "TypeScript SDK for the Finesse voice API: voice cloning, text-to-speech and realtime streaming.",
   "license": "UNLICENSED",
   "private": true,
