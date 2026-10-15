@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer, type WebSocket } from "ws";
 import * as ff from "../src/index.js";
 import type { RealtimeSession } from "../src/index.js";
+import { MAX_FRAME_BYTES, splitText } from "../src/realtime.js";
 
 const VID = "665f1a2b3c4d5e6f7a8b9c0d";
 const PATH = "/flam-voice-svc/api/v1/public/stream";
@@ -191,6 +192,43 @@ describe("realtime", () => {
       ["task_continue", undefined, true],
     ]);
     expect(engine.received[0]!.idle_flush_ms).toBe(300);
+  });
+
+  it("splits text over the 1 MiB frame cap across task_continue frames", async () => {
+    const engine = new Engine();
+    engine.onMessage = () => undefined;
+    const client = await start(engine);
+    // Multi-byte text with quotes (escaped) and emoji (surrogate pairs) near every boundary.
+    const unit = 'a"é€😀';
+    const long = unit.repeat(Math.ceil((2.5 * MAX_FRAME_BYTES) / 12));
+    await session(client, async (rt) => {
+      const ctx = rt.context({ voice_id: VID, context_id: "big" });
+      await ctx.send(long, { finalize: true });
+      await vi.waitFor(() => expect(engine.received.length).toBeGreaterThanOrEqual(3));
+      await ctx.cancel();
+    });
+    const frames = engine.received.filter((m) => m.context_id === "big" && "text" in m);
+    expect(frames.map((m) => m.type)).toEqual([
+      "task_start",
+      ...Array(frames.length - 1).fill("task_continue"),
+    ]);
+    expect(frames.length).toBeGreaterThanOrEqual(3);
+    expect(frames.map((m) => m.finalize)).toEqual([...Array(frames.length - 1).fill(false), true]);
+    expect(frames.map((m) => m.text).join("")).toBe(long);
+    for (const m of frames) {
+      expect(Buffer.byteLength(JSON.stringify(m))).toBeLessThanOrEqual(MAX_FRAME_BYTES);
+      expect(m.text).not.toMatch(/^[\udc00-\udfff]|[\ud800-\udbff]$/);
+    }
+    expect(frames[0]!.voice_id).toBe(VID);
+  });
+
+  it("splits text without breaking code points", () => {
+    expect(splitText("ab", 1)).toEqual(["a", "b"]);
+    expect(splitText("😀😀", 5)).toEqual(["😀", "😀"]);
+    expect(splitText('"\\', 3)).toEqual(['"', "\\"]);
+    expect(splitText("\ud800x", 6)).toEqual(["\ud800", "x"]); // a lone surrogate is escaped
+    expect(splitText("😀", 1)).toEqual(["😀"]); // at least one code point per piece
+    expect(splitText("", 10)).toEqual([""]);
   });
 
   it("demultiplexes concurrent contexts", async () => {
@@ -707,6 +745,39 @@ describe("realtime", () => {
       expect(url.searchParams.get("api_key")).toBe("flv_k");
       expect(url.searchParams.get("client")).toMatch(/^flam-finesse-node\//);
       expect(calls[0]).toHaveLength(1);
+    });
+
+    it("Deno 2.5+: the global WebSocket with headers", async () => {
+      const { calls, Fake } = fakeWebSocket();
+      vi.stubGlobal("WebSocket", Fake);
+      vi.stubGlobal("Deno", { version: { deno: "2.5.0" } });
+      const client = new ff.Finesse({ apiKey: "flv_k", baseURL: "https://x.test" });
+      await expect(client.realtime.connect()).rejects.toThrow("fake socket");
+      expect(String(calls[0]![0])).toBe("wss://x.test/flam-voice-svc/api/v1/public/stream");
+      expect((calls[0]![1] as { headers: Record<string, string> }).headers["X-API-Key"]).toBe(
+        "flv_k",
+      );
+    });
+
+    it("warns once about a key in the URL, whatever the log level", async () => {
+      const { Fake } = fakeWebSocket();
+      vi.stubGlobal("WebSocket", Fake);
+      vi.stubGlobal("Deno", { version: { deno: "2.4.5" } });
+      const logger = { debug: vi.fn(), info: vi.fn() };
+      const client = new ff.Finesse({ apiKey: "flv_k", baseURL: "https://x.test", logger });
+      await expect(client.realtime.connect()).rejects.toThrow("fake socket");
+      await expect(client.realtime.connect()).rejects.toThrow("fake socket");
+      expect(logger.info).toHaveBeenCalledTimes(1);
+      const line = String(logger.info.mock.calls[0]![0]);
+      expect(line).toMatch(/deprecated.*accessToken/s);
+      expect(line).not.toContain("flv_k");
+      const token = new ff.Finesse({
+        accessToken: "fin_tok_x",
+        baseURL: "https://x.test",
+        logger: { debug: vi.fn(), info: vi.fn() },
+      });
+      await expect(token.realtime.connect()).rejects.toThrow("fake socket");
+      expect(token._core.logger.info).not.toHaveBeenCalled();
     });
   });
 });
