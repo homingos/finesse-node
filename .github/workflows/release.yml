@@ -1,0 +1,39 @@
+name: Release
+
+# Publishes to npm when a version tag (v0.1.1, ...) is pushed. Uses npm Trusted Publishing
+# (GitHub OIDC): no npm token is stored. Configure the trusted publisher on npmjs.com for
+# @flamai/finesse (repository homingos/finesse-node, workflow release.yml) before tagging.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  id-token: write # OIDC token for npm Trusted Publishing
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          registry-url: "https://registry.npmjs.org"
+      - name: Tag matches package.json version
+        run: |
+          v=$(node -p "require('./package.json').version")
+          if [ "v$v" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME does not match package.json version $v" >&2
+            exit 1
+          fi
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm test
+      - run: pnpm build
+      # Trusted Publishing needs npm 11.5.1 or later; Node 22 ships npm 10.
+      - run: npm install -g npm@11.5.1
+      - run: npm publish --access public
