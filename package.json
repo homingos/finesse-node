@@ -1,9 +1,13 @@
 {
-  "name": "@flam/finesse",
+  "name": "@flamai/finesse",
   "version": "0.1.1",
   "description": "TypeScript SDK for the Finesse voice API: voice cloning, text-to-speech and realtime streaming.",
   "license": "UNLICENSED",
-  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/homingos/finesse-node.git"
+  },
+  "homepage": "https://docs.finesse.flamapp.ai",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
@@ -62,5 +66,8 @@
     "vitest": "^2.1.0",
     "ws": "^8.18.0"
   },
-  "packageManager": "pnpm@10.15.1"
+  "packageManager": "pnpm@10.15.1",
+  "publishConfig": {
+    "access": "public"
+  }
 }

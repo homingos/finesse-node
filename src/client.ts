@@ -27,7 +27,7 @@ function resources(core: Core): FinesseResources {
  * Client for the Finesse API.
  *
  * ```ts
- * import { Finesse } from "@flam/finesse";
+ * import { Finesse } from "@flamai/finesse";
  *
  * const client = new Finesse(); // reads FINESSE_API_KEY
  * const audio = await client.speech.create({ voice_id: "665f1a2b3c4d5e6f7a8b9c0d", text: "Hello!" });

@@ -2,6 +2,7 @@
 
 ## 0.1.1 (unreleased)
 
+- Published on npm as `@flamai/finesse` (was private, installed from GitHub).
 - Token clients (`accessToken`) retry only `429` and connections that never opened. The
   service spends the token before running the request, so retrying a later `5xx` or dropped
   connection only got `401 token_invalid` and hid the real error.

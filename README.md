@@ -8,7 +8,7 @@
   <img alt="Node 18+" src="https://img.shields.io/badge/node-18%2B-14151A?style=flat&labelColor=14151A&color=2547F0">
   <img alt="Bun and Deno" src="https://img.shields.io/badge/also-Bun%20%C2%B7%20Deno-14151A?style=flat&labelColor=14151A&color=2547F0">
   <img alt="TypeScript types included" src="https://img.shields.io/badge/types-included-14151A?style=flat&labelColor=14151A&color=2547F0">
-  <img alt="Status: private preview" src="https://img.shields.io/badge/status-private%20preview-14151A?style=flat&labelColor=14151A&color=63656A">
+  <img alt="Status: beta" src="https://img.shields.io/badge/status-beta-14151A?style=flat&labelColor=14151A&color=63656A">
 </p>
 
 # Finesse TypeScript SDK
@@ -50,16 +50,13 @@ and stream it in realtime to voice agents, with a few lines of code.
 
 ## Installation
 
-The SDK is in private preview, so install it from GitHub (you need access to the repository).
 Realtime in Node also needs the `ws` package:
 
 ```sh
-npm install github:homingos/finesse-node ws
+npm install @flamai/finesse ws
 # or
-pnpm add github:homingos/finesse-node ws
+pnpm add @flamai/finesse ws
 ```
-
-Once it is published this becomes `npm install @flam/finesse`.
 
 ## Get an API key
 
@@ -82,7 +79,7 @@ Keep the key on your server. Anyone who has it can spend your workspace's credit
 
 ```ts
 import { writeFile } from "node:fs/promises";
-import { Finesse, isReady } from "@flam/finesse";
+import { Finesse, isReady } from "@flamai/finesse";
 
 const client = new Finesse(); // reads FINESSE_API_KEY
 
@@ -142,7 +139,7 @@ Upload a clean reference clip of one speaker (10-30 seconds of clear speech work
 their voice, and the attestation is recorded on the voice.
 
 ```ts
-import { fileFromPath } from "@flam/finesse";
+import { fileFromPath } from "@flamai/finesse";
 
 const voice = await client.voices.cloneAndWait(
   {
@@ -351,7 +348,7 @@ import {
   APIStatusError,
   PaymentRequiredError,
   RateLimitError,
-} from "@flam/finesse";
+} from "@flamai/finesse";
 
 try {
   await client.speech.create({ voice_id: voice.id, text: "Hello!" });
@@ -556,7 +553,7 @@ The SDK follows [semantic versioning](https://semver.org). Before 1.0, minor ver
 include breaking changes; they are listed in the [changelog](./CHANGELOG.md).
 
 ```ts
-import { VERSION } from "@flam/finesse";
+import { VERSION } from "@flamai/finesse";
 ```
 
 ## Contributing
