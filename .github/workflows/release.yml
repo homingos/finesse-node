@@ -7,6 +7,9 @@ on:
   push:
     tags: ["v*"]
 
+env:
+  NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
 permissions:
   contents: read
   id-token: write # OIDC token for npm Trusted Publishing
@@ -36,4 +39,14 @@ jobs:
       - run: pnpm build
       # Trusted Publishing needs npm 11.5.1 or later; Node 22 ships npm 10.
       - run: npm install -g npm@11.5.1
-      - run: npm publish --access public
+      # Bootstrap: npm only lets a trusted publisher be attached to a package that already
+      # exists, so the first release can use an NPM_TOKEN secret (a granular token for the
+      # @flamai scope). Delete the secret once the trusted publisher is set up.
+      - name: Publish with NPM_TOKEN
+        if: env.NPM_TOKEN != ''
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Publish with Trusted Publishing
+        if: env.NPM_TOKEN == ''
+        run: npm publish --access public
