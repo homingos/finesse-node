@@ -492,7 +492,7 @@ The client talks to production by default. Point it elsewhere with `baseURL` or
 `FINESSE_BASE_URL`:
 
 ```ts
-const client = new Finesse({ baseURL: "https://fi.development.flamapis.com" });
+const client = new Finesse({ baseURL: "https://finesse-proxy.example.com" });
 ```
 
 ### Configuration
@@ -569,5 +569,5 @@ and refuse to run against production:
 
 ```sh
 FINESSE_LIVE=1 FINESSE_API_KEY=flv_... \
-FINESSE_BASE_URL=https://fi.development.flamapis.com pnpm vitest run tests/live
+FINESSE_BASE_URL=<non-production API URL> pnpm vitest run tests/live
 ```
