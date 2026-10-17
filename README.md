@@ -571,3 +571,7 @@ and refuse to run against production:
 FINESSE_LIVE=1 FINESSE_API_KEY=flv_... \
 FINESSE_BASE_URL=<non-production API URL> pnpm vitest run tests/live
 ```
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE).

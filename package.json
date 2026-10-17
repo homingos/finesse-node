@@ -2,7 +2,7 @@
   "name": "@flamai/finesse",
   "version": "0.1.1",
   "description": "TypeScript SDK for the Finesse voice API: voice cloning, text-to-speech and realtime streaming.",
-  "license": "UNLICENSED",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/homingos/finesse-node.git"
