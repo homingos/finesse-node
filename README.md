@@ -499,22 +499,12 @@ const quick = client.withOptions({ timeout: 10_000, maxRetries: 0 });
 await quick.voices.get(voiceId);
 ```
 
-### Environments
-
-The client talks to production by default. Point it elsewhere with `baseURL` or
-`FINESSE_BASE_URL`:
-
-```ts
-const client = new Finesse({ baseURL: "https://finesse-proxy.example.com" });
-```
-
 ### Configuration
 
 | Option                    | Environment variable | Default                               |
 | ------------------------- | -------------------- | ------------------------------------- |
 | `apiKey`                  | `FINESSE_API_KEY`    | required, unless `accessToken`        |
 | `accessToken`             |                      | none (a short-lived `fin_tok_` token) |
-| `baseURL`                 | `FINESSE_BASE_URL`   | `https://fi.production.flamapis.com`  |
 | `timeout`                 |                      | 120 000 ms                            |
 | `maxRetries`              |                      | 2                                     |
 | `defaultHeaders`          |                      | none                                  |
