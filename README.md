@@ -5,10 +5,12 @@
 </picture>
 
 <p>
+  <a href="https://www.npmjs.com/package/@flamai/finesse"><img alt="npm version" src="https://img.shields.io/npm/v/@flamai/finesse?style=flat&labelColor=14151A&color=2547F0"></a>
   <img alt="Node 18+" src="https://img.shields.io/badge/node-18%2B-14151A?style=flat&labelColor=14151A&color=2547F0">
   <img alt="Bun and Deno" src="https://img.shields.io/badge/also-Bun%20%C2%B7%20Deno-14151A?style=flat&labelColor=14151A&color=2547F0">
   <img alt="TypeScript types included" src="https://img.shields.io/badge/types-included-14151A?style=flat&labelColor=14151A&color=2547F0">
   <img alt="Status: beta" src="https://img.shields.io/badge/status-beta-14151A?style=flat&labelColor=14151A&color=63656A">
+  <a href="./LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-14151A?style=flat&labelColor=14151A&color=63656A"></a>
 </p>
 
 # Finesse TypeScript SDK
@@ -47,6 +49,11 @@ and stream it in realtime to voice agents, with a few lines of code.
 - [Request IDs](#request-ids)
 - [Advanced](#advanced)
 - [Runtimes](#runtimes)
+- [Requirements](#requirements)
+- [Versioning](#versioning)
+- [Getting help](#getting-help)
+- [Security](#security)
+- [Contributing](#contributing)
 
 ## Installation
 
@@ -56,7 +63,13 @@ Realtime in Node also needs the `ws` package:
 npm install @flamai/finesse ws
 # or
 pnpm add @flamai/finesse ws
+# or
+yarn add @flamai/finesse ws
+# or
+bun add @flamai/finesse
 ```
+
+`ws` is only needed for realtime in Node. Bun, Deno and browsers have a built-in `WebSocket`.
 
 ## Get an API key
 
@@ -510,6 +523,8 @@ const client = new Finesse({ baseURL: "https://finesse-proxy.example.com" });
 | `logLevel`                | `FINESSE_LOG`        | `"off"`                               |
 | `logger`                  |                      | `console`                             |
 
+An option passed to `new Finesse({...})` always wins over its environment variable.
+
 ### Custom fetch
 
 Pass your own `fetch` for proxies, logging or tests:
@@ -542,10 +557,27 @@ Browsers can't keep an API key secret, so a client holding a key refuses to run 
 deprecated URL parameter, because browsers can't set WebSocket headers (as does Deno before
 2.5), and logs a warning once.
 
+## TypeScript types
+
+Every request and response type is exported, so you can type your own code against the API:
+
+```ts
+import type { Voice } from "@flamai/finesse";
+
+function label(voice: Voice) {
+  return `${voice.name} (${voice.id})`;
+}
+```
+
 ## Examples
 
 Runnable scripts are in [`examples/`](./examples): [`speak.ts`](./examples/speak.ts) and
 [`realtime.ts`](./examples/realtime.ts).
+
+## Requirements
+
+- Node 18 or later, Bun, Deno, or a modern browser (see [Runtimes](#runtimes)).
+- TypeScript 4.7 or later, if you use TypeScript.
 
 ## Versioning
 
@@ -555,6 +587,18 @@ include breaking changes; they are listed in the [changelog](./CHANGELOG.md).
 ```ts
 import { VERSION } from "@flamai/finesse";
 ```
+
+## Getting help
+
+- [Documentation](https://docs.finesse.flamapp.ai) for guides and the API reference.
+- [GitHub issues](https://github.com/homingos/finesse-node/issues) for bugs and feature requests
+  in this SDK. Include the `requestId` from the error (see [Request IDs](#request-ids)) when
+  a request failed.
+
+## Security
+
+Please don't report security problems in a public issue. See [SECURITY.md](./SECURITY.md) for
+how to report one privately.
 
 ## Contributing
 

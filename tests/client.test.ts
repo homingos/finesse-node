@@ -15,8 +15,8 @@ describe("client", () => {
     vi.stubEnv("FINESSE_API_KEY", "flv_env");
     vi.stubEnv("FINESSE_BASE_URL", "");
     expect(new Finesse().baseURL).toBe(DEFAULT_BASE_URL);
-    vi.stubEnv("FINESSE_BASE_URL", "https://fi.development.flamapis.com/");
-    expect(new Finesse().baseURL).toBe("https://fi.development.flamapis.com");
+    vi.stubEnv("FINESSE_BASE_URL", "https://finesse.example.com/");
+    expect(new Finesse().baseURL).toBe("https://finesse.example.com");
   });
 
   it("sends auth and attribution headers to the right URL", async () => {
