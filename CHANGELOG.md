@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.2 (unreleased)
+
+- `output_format: "mulaw"` (raw G.711 µ-law) for telephony, with `sample_rate: 8000`, on
+  `speech` and realtime contexts. 8 kHz is now produced as asked; the README shows Twilio Media
+  Streams.
+
 ## 0.1.1 (unreleased)
 
 - Published on npm as `@flamai/finesse` (was private, installed from GitHub).

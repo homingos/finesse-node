@@ -178,10 +178,11 @@ export interface ContextOptions {
   voice_id: string;
   context_id?: string;
   language?: string;
-  /** `s16le` (default), `s24le`, `s32le`, `f32le`, `f64le` or `opus`. */
-  output_format?: "s16le" | "s24le" | "s32le" | "f32le" | "f64le" | "opus";
-  /** Output rate in Hz, 8000-48000; the native rate is 24000 and lower values still produce
-   * 24000. */
+  /** `s16le` (default), `s24le`, `s32le`, `f32le`, `f64le`, `opus`, or `mulaw` (G.711 µ-law
+   * for telephony, with `sample_rate: 8000`). */
+  output_format?: "s16le" | "s24le" | "s32le" | "f32le" | "f64le" | "opus" | "mulaw";
+  /** Output rate in Hz, 8000-48000; the native rate is 24000. 8000 is produced as asked, other
+   * lower values still produce 24000. */
   sample_rate?: number;
   /** Generation steps, 1-32 (default 32); fewer is faster. Values over 32 are capped. */
   num_step?: number;
