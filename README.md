@@ -194,7 +194,7 @@ const audio = await client.speech.create({
   voice_id: voice.id,
   text: "The quick brown fox jumps over the lazy dog.",
   language: "en", // optional; defaults to the voice's language
-  output_format: "wav", // default; or raw PCM: "s16le", "s24le", "s32le", "f32le", "f64le"
+  output_format: "wav", // default; or raw PCM: "s16le", "s24le", "s32le", "f32le", "f64le", or "mulaw"
   num_step: 32, // optional; 1-32, default 32; fewer steps is faster
 });
 
@@ -344,11 +344,26 @@ outside `voice_ids` throws `PermissionDeniedError` with `code === "voice_not_all
 | `s16le`          | Raw PCM, 16-bit signed little-endian | `speech.stream`, realtime |
 | `s24le`, `s32le` | Raw PCM, 24- or 32-bit signed        |                           |
 | `f32le`, `f64le` | Raw PCM, 32- or 64-bit float         |                           |
+| `mulaw`          | Raw G.711 µ-law, for telephony       | needs `sample_rate: 8000` |
 | `opus`           | Opus                                 | realtime only             |
 
-All audio is mono. The engine's native rate is 24 kHz. You can ask for a higher `sample_rate`,
-but lower ones still come back at 24 kHz, so always read the actual rate from
-`audio.sampleRate`, `stream.sampleRate` or the `task_started` event.
+All audio is mono. The engine's native rate is 24 kHz. You can ask for a higher `sample_rate`, or
+for 8000 (telephony); other lower rates still come back at 24 kHz, so always read the actual rate
+from `audio.sampleRate`, `stream.sampleRate` or the `task_started` event.
+
+### Phone calls (Twilio)
+
+Twilio Media Streams play 8 kHz µ-law. Ask for exactly that and send each chunk as the media
+payload, base64-encoded; there is no WAV header to strip and nothing to resample:
+
+```ts
+const ctx = rt.context({ voice_id: voiceId, output_format: "mulaw", sample_rate: 8000 });
+
+for await (const audio of ctx.audio()) {
+  const payload = Buffer.from(audio).toString("base64");
+  twilioWs.send(JSON.stringify({ event: "media", streamSid, media: { payload } }));
+}
+```
 
 ## Handling errors
 

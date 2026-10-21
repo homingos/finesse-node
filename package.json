@@ -1,6 +1,6 @@
 {
   "name": "@flamai/finesse",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "TypeScript SDK for the Finesse voice API: voice cloning, text-to-speech and realtime streaming.",
   "license": "Apache-2.0",
   "repository": {

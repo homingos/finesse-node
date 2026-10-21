@@ -114,7 +114,8 @@ export interface AccessToken {
   ttl_seconds: number;
 }
 
-export type OutputFormat = "wav" | "s16le" | "s24le" | "s32le" | "f32le" | "f64le";
+/** `mulaw` is raw G.711 µ-law for telephony and needs `sample_rate: 8000`. */
+export type OutputFormat = "wav" | "s16le" | "s24le" | "s32le" | "f32le" | "f64le" | "mulaw";
 
 export interface SpeechParams {
   /** One of your voices or a public platform voice; it must be ready. */
@@ -123,7 +124,8 @@ export interface SpeechParams {
   text: string;
   language?: string;
   output_format?: OutputFormat;
-  /** Output rate in Hz, 8000-48000. The native rate is 24000; lower values still return 24000. */
+  /** Output rate in Hz, 8000-48000. The native rate is 24000; 8000 is produced as asked, other
+   * lower values still return 24000. */
   sample_rate?: number;
   /** Generation steps, 1-32 (default and maximum 32; over 32 is a 400); fewer is faster. */
   num_step?: number;
