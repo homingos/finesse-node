@@ -472,6 +472,108 @@ describe("realtime", () => {
     ]);
   });
 
+  describe("direct sessions", () => {
+    const future = () => new Date(Date.now() + 60_000).toISOString();
+    const direct = (
+      client: ff.Finesse,
+      token: string,
+      connect_by = future(),
+    ): ff.DirectSession => ({
+      session_id: `s_${token}`,
+      url: `${client.baseURL.replace("http", "ws")}/v1/stream`,
+      protocol: "finesse.v1",
+      token,
+      connect_by,
+      ttl_seconds: 3600,
+      budget_chars: 20000,
+      region: "ap-south",
+      voices: [VID],
+    });
+
+    it("connects to the session's URL with its token as a subprotocol, without the key", async () => {
+      const engine = new Engine();
+      const client = await start(engine);
+      const s = direct(client, "ft1.one");
+      const rt = await client.realtime.connect({ session: s });
+      expect((await collect(rt.say({ voice_id: VID, text: "hi" }))).at(-1).type).toBe("task_done");
+      expect(rt.directSession).toBe(s);
+      await rt.close();
+      const req = engine.requests[0]!;
+      expect(req.url).toBe("/v1/stream");
+      expect(protocols(req)).toEqual(["finesse.v1", "ft1.one"]);
+      expect(req.headers["x-api-key"]).toBeUndefined();
+      expect(req.headers.authorization).toBeUndefined();
+    });
+
+    it("refuses to reuse a spent session, and gets a new one from getSession", async () => {
+      const engine = new Engine();
+      dropFirstTask(engine);
+      const client = await start(engine);
+      const rt = await client.realtime.connect({ session: direct(client, "ft1.a") });
+      await collect(rt.say({ voice_id: VID, text: "x" })).catch(() => undefined);
+      const e = await collect(rt.say({ voice_id: VID, text: "again" })).catch((x) => x);
+      expect(e.code).toBe("session_spent");
+      await rt.close();
+
+      const engine2 = new Engine();
+      dropFirstTask(engine2);
+      const client2 = await start(engine2);
+      let n = 0;
+      const rt2 = await client2.realtime.connect({
+        session: direct(client2, "ft1.first"),
+        getSession: async () => direct(client2, `ft1.fresh${n++}`),
+      });
+      await collect(rt2.say({ voice_id: VID, text: "x" })).catch(() => undefined);
+      expect((await collect(rt2.say({ voice_id: VID, text: "again" }))).at(-1).type).toBe(
+        "task_done",
+      );
+      expect(rt2.directSession?.token).toBe("ft1.fresh0");
+      await rt2.close();
+      expect(engine2.requests.map(protocols)).toEqual([
+        ["finesse.v1", "ft1.first"],
+        ["finesse.v1", "ft1.fresh0"],
+      ]);
+    });
+
+    it("does not dial a session past connect_by", async () => {
+      const engine = new Engine();
+      const client = await start(engine);
+      const old = direct(client, "ft1.old", new Date(Date.now() - 1000).toISOString());
+      const e = await client.realtime.connect({ session: old }).catch((x) => x);
+      expect(e.code).toBe("session_expired");
+      expect(engine.connections).toBe(0);
+    });
+
+    it("reports a refused token (4401) as unauthorized, not a service fault", async () => {
+      const engine = new Engine();
+      engine.onMessage = (ws) => ws.close(4401, "unauthorized");
+      const client = await start(engine);
+      const rt = await client.realtime.connect({ session: direct(client, "ft1.used") });
+      const e = await collect(rt.say({ voice_id: VID, text: "x" })).catch((x) => x);
+      expect([e.code, e.closeCode, e.retryable]).toEqual(["unauthorized", 4401, false]);
+      await rt.close();
+    });
+
+    it("connectDirect opens a session without an API key", async () => {
+      const engine = new Engine();
+      const client = await start(engine);
+      const rt = await ff.connectDirect({ getSession: async () => direct(client, "ft1.browser") });
+      expect((await collect(rt.say({ voice_id: VID, text: "hi" }))).at(-1).type).toBe("task_done");
+      await rt.close();
+      const req = engine.requests[0]!;
+      expect(protocols(req)).toEqual(["finesse.v1", "ft1.browser"]);
+      expect(req.headers.authorization).toBeUndefined();
+      expect(req.headers["x-api-key"]).toBeUndefined();
+    });
+
+    it("refuses a session and an access token together", async () => {
+      const client = new ff.Finesse({ apiKey: "flv_test", baseURL: "http://127.0.0.1:1" });
+      expect(() =>
+        client.realtime.session({ session: direct(client, "ft1.x"), accessToken: "fin_tok_x" }),
+      ).toThrow(/not both/);
+    });
+  });
+
   it("does not reconnect when disabled", async () => {
     const engine = new Engine();
     engine.onMessage = closing(null, 1011, "upstream_closed");
