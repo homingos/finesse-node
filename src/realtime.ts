@@ -27,10 +27,18 @@
  */
 
 import { API_PREFIX, Core, isBrowser, type Logger, type RequestOptions } from "./core.js";
-import { APIConnectionError, APITimeoutError, FinesseError, makeStatusError } from "./errors.js";
+import {
+  APIConnectionError,
+  APIStatusError,
+  APITimeoutError,
+  FinesseError,
+  makeStatusError,
+} from "./errors.js";
 import type { DirectSession } from "./types.js";
 
 export const DEFAULT_OPEN_TIMEOUT_MS = 60_000;
+/** Waits between handshakes while a direct session's GPU region starts a container (503). */
+const COLD_START_BACKOFF_MS = [250, 500, 1000, 2000];
 /** The protocol the service selects. A short-lived token travels as a second subprotocol. */
 export const SUBPROTOCOL = "finesse.v1";
 const CLOSE_TIMEOUT_MS = 5_000;
@@ -747,6 +755,86 @@ export class RealtimeSession {
       u.searchParams.set("client", this.core.headers["X-Finesse-Client"] ?? "");
       url = u.toString();
     }
+    const ws = direct
+      ? await this.handshakeDirect(dialer, url, headers, timeout, protocols!, direct)
+      : await this.handshake(dialer, url, headers, timeout, protocols);
+
+    if (this.closed) {
+      ws.close(1000);
+      throw new RealtimeError("session_closed", "This session was closed.");
+    }
+    if (token && token === this.staticToken) this.tokenSpent = true; // the handshake spent it
+    if (direct) {
+      if (direct === this.options.session) this.staticSessionSpent = true;
+      this.current = direct;
+    }
+    this.ws = ws;
+    this.pendingAudio = null;
+    this.fatal = null;
+    this.error = null;
+    this.openedOnce = true;
+    ws.onerror = () => undefined; // onclose follows and carries the reason
+    ws.onmessage = (ev) => {
+      if (this.ws !== ws) return; // a replaced socket
+      try {
+        if (typeof ev.data === "string") this.onMessage(ev.data);
+        else this.onAudio(toBytes(ev.data));
+      } catch {
+        /* a frame we cannot parse must not end the session */
+      }
+    };
+    ws.onclose = (ev) => this.onClose(ws, ev.code, ev.reason);
+  }
+
+  /** Dial a direct session. A GPU region with no running container refuses the handshake with
+   * 503 instead of waiting for one to start (a cold start can take about a minute), so a 503 is
+   * retried with backoff on the same session (the GPU never saw its token) until the open
+   * timeout or the session's connect_by, whichever comes first. */
+  private async handshakeDirect(
+    dialer: Dialer,
+    url: string,
+    headers: Record<string, string> | null,
+    timeout: number,
+    protocols: string[],
+    direct: DirectSession,
+  ): Promise<Socket> {
+    const connectBy = Date.parse(direct.connect_by);
+    const deadline = Math.min(
+      Date.now() + timeout,
+      Number.isFinite(connectBy) ? connectBy : Infinity,
+    );
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.handshake(
+          dialer,
+          url,
+          headers,
+          Math.max(deadline - Date.now(), 1),
+          protocols,
+        );
+      } catch (err) {
+        if (!(err instanceof APIStatusError) || err.status !== 503) throw err;
+        const wait = COLD_START_BACKOFF_MS[Math.min(attempt, COLD_START_BACKOFF_MS.length - 1)]!;
+        if (this.closed) throw new RealtimeError("session_closed", "This session was closed.");
+        if (Date.now() + wait >= deadline) throw err;
+        if (this.core.logLevel === "debug") {
+          this.core.logger.debug(
+            `[finesse] direct session: GPU not ready (503), retrying in ${wait} ms`,
+          );
+        }
+        await new Promise((r) => setTimeout(r, wait));
+        if (this.closed) throw new RealtimeError("session_closed", "This session was closed.");
+      }
+    }
+  }
+
+  private async handshake(
+    dialer: Dialer,
+    url: string,
+    headers: Record<string, string> | null,
+    timeout: number,
+    protocols: string[] | undefined,
+  ): Promise<Socket> {
     const ws = dialer.open(url, headers, timeout, protocols);
     ws.binaryType = "arraybuffer";
 
@@ -785,32 +873,7 @@ export class RealtimeSession {
       ws.onclose = (ev) =>
         done(new APIConnectionError(lastError || `Connection closed (${ev.code}).`));
     });
-
-    if (this.closed) {
-      ws.close(1000);
-      throw new RealtimeError("session_closed", "This session was closed.");
-    }
-    if (token && token === this.staticToken) this.tokenSpent = true; // the handshake spent it
-    if (direct) {
-      if (direct === this.options.session) this.staticSessionSpent = true;
-      this.current = direct;
-    }
-    this.ws = ws;
-    this.pendingAudio = null;
-    this.fatal = null;
-    this.error = null;
-    this.openedOnce = true;
-    ws.onerror = () => undefined; // onclose follows and carries the reason
-    ws.onmessage = (ev) => {
-      if (this.ws !== ws) return; // a replaced socket
-      try {
-        if (typeof ev.data === "string") this.onMessage(ev.data);
-        else this.onAudio(toBytes(ev.data));
-      } catch {
-        /* a frame we cannot parse must not end the session */
-      }
-    };
-    ws.onclose = (ev) => this.onClose(ws, ev.code, ev.reason);
+    return ws;
   }
 
   private onClose(ws: Socket, code: number, reason: string): void {
