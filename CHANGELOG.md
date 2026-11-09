@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.1
+
+- Direct sessions survive a cold GPU: a region with no running container refuses the handshake
+  with `503` until one starts, and connecting now retries it with backoff on the same session
+  (no extra session, so no extra concurrency slot) until `openTimeout` or `connect_by`. Before,
+  the first connect to a scaled-down region failed with `InternalServerError`.
+
 ## 0.2.0
 
 - Direct realtime sessions: `realtime.sessions.create({ voice_ids, budget_chars })` and

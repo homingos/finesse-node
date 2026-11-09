@@ -566,6 +566,78 @@ describe("realtime", () => {
       expect(req.headers["x-api-key"]).toBeUndefined();
     });
 
+    // A GPU region with no running container answers 503 until one starts.
+    async function coldGpu(refusals: number) {
+      const seen: string[][] = [];
+      let accepted = 0;
+      const wss = new WebSocketServer({
+        port: 0,
+        host: "127.0.0.1",
+        verifyClient: (info: { req: IncomingMessage }, cb: (...a: any[]) => void) => {
+          seen.push(protocols(info.req));
+          if (seen.length <= refusals) {
+            cb(false, 503, JSON.stringify({ error: "no upstreams available" }), {
+              "Content-Type": "application/json",
+            });
+          } else cb(true);
+        },
+      });
+      wss.on("connection", (ws) => {
+        accepted++;
+        ws.on("message", (raw, isBinary) => {
+          if (!isBinary) defaultHandler(ws, JSON.parse(raw.toString()), new Engine());
+        });
+      });
+      servers.push(wss);
+      await new Promise<void>((r) => wss.on("listening", () => r()));
+      const { port } = wss.address() as { port: number };
+      const client = new ff.Finesse({ apiKey: "flv_test", baseURL: `http://127.0.0.1:${port}` });
+      return { client, seen, accepted: () => accepted };
+    }
+
+    it("retries a cold GPU's 503 on the same session until it accepts", async () => {
+      const gpu = await coldGpu(2);
+      let minted = 0;
+      const rt = await gpu.client.realtime.connect({
+        getSession: async () => direct(gpu.client, `ft1.s${minted++}`),
+      });
+      expect((await collect(rt.say({ voice_id: VID, text: "hi" }))).at(-1).type).toBe("task_done");
+      await rt.close();
+      expect(minted).toBe(1); // no extra sessions (each holds a concurrency slot)
+      expect(gpu.seen).toEqual([
+        ["finesse.v1", "ft1.s0"],
+        ["finesse.v1", "ft1.s0"],
+        ["finesse.v1", "ft1.s0"],
+      ]);
+    });
+
+    it("gives up on a GPU that stays cold past the open timeout", async () => {
+      const gpu = await coldGpu(Infinity);
+      const e = await gpu.client.realtime
+        .connect({ session: direct(gpu.client, "ft1.cold"), openTimeout: 600 })
+        .catch((x) => x);
+      expect(e).toBeInstanceOf(ff.InternalServerError);
+      expect(e.status).toBe(503);
+      expect(gpu.seen.length).toBeGreaterThan(1);
+      expect(gpu.accepted()).toBe(0);
+    });
+
+    it("stops retrying when closed", async () => {
+      const gpu = await coldGpu(Infinity);
+      const rt = gpu.client.realtime.session({ session: direct(gpu.client, "ft1.c") });
+      const opening = rt.open();
+      await new Promise((r) => setTimeout(r, 100));
+      await rt.close();
+      expect((await opening.catch((x) => x)).code).toBe("session_closed");
+    });
+
+    it("does not retry a 503 through the API", async () => {
+      const gpu = await coldGpu(Infinity);
+      const e = await gpu.client.realtime.connect().catch((x) => x);
+      expect(e.status).toBe(503);
+      expect(gpu.seen.length).toBe(1);
+    });
+
     it("refuses a session and an access token together", async () => {
       const client = new ff.Finesse({ apiKey: "flv_test", baseURL: "http://127.0.0.1:1" });
       expect(() =>
