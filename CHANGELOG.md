@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
 
 - Direct realtime sessions: `realtime.sessions.create({ voice_ids, budget_chars })` and
   `realtime.connect({ session })` / `{ getSession }` run the socket straight against the
