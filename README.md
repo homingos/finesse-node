@@ -39,6 +39,7 @@ and stream it in realtime to voice agents, with a few lines of code.
 - [Text to speech](#text-to-speech)
 - [Streaming speech](#streaming-speech)
 - [Realtime](#realtime)
+- [Direct sessions (lowest latency)](#direct-sessions-lowest-latency)
 - [Browsers and short-lived tokens](#browsers-and-short-lived-tokens)
 - [Which method should I use?](#which-method-should-i-use)
 - [Audio formats](#audio-formats)
@@ -296,6 +297,52 @@ A turn that fails throws `RealtimeError` (for example `code === "voice_not_found
 - Running out of credits ends the session with `RealtimeError` (`code === "insufficient_credits"`).
 - Text is billed per character as it is sent. A session reserves credits in blocks of up to
   1,000 characters and returns what it doesn't use when it ends.
+
+## Direct sessions (lowest latency)
+
+A direct session runs the realtime socket **straight against the synthesis GPU** in your
+account's server region, so audio never passes through the API and each sentence starts sooner.
+Contexts, events, cancel and limits work exactly as above.
+
+```ts
+// On a server, with your API key: a new session for the first connection and every reconnect.
+const rt = await client.realtime.connect({
+  getSession: () => client.realtime.sessions.create({ voice_ids: [voiceId] }),
+});
+for await (const event of rt.say({ voice_id: voiceId, text: "Hello, straight from the GPU." })) {
+  if (event.type === "audio") play(event.pcm);
+}
+console.log(rt.directSession?.region); // "ap-south" or "us-east"
+await rt.close();
+```
+
+In a browser, create the session on your server and return it (it holds no API key), then
+connect with it:
+
+```ts
+// On your server
+const session = await client.realtime.sessions.create({ voice_ids: [voiceId] });
+return Response.json(session);
+
+// In the browser
+import { connectDirect } from "@flamai/finesse";
+
+const getSession = async () => (await fetch("/api/finesse-session", { method: "POST" })).json();
+const rt = await connectDirect({ getSession });
+```
+
+How it differs from a session through the API:
+
+- **Voices:** only the `voice_ids` you list (1-16). A context for any other voice fails with
+  `voice_not_found`; the session keeps running.
+- **Credits:** `budget_chars` (default 20,000) is reserved when the session is created and the
+  rest is returned when it ends. Going past it ends the session with `insufficient_credits`.
+- **Lifetime:** connect within 60 s of creating it (`connect_by`), and a session runs at most an
+  hour (`ttl_seconds`), then ends with `session_ended`.
+- **Single use:** the session's token works for one connection. With `{ session }` alone, a
+  reconnect throws `RealtimeError` with `code === "session_spent"`; pass `getSession` so each
+  reconnect gets a new session. A refused token throws `code === "unauthorized"`.
+- **Region:** set by the account that owns the API key, not per request.
 
 ## Browsers and short-lived tokens
 

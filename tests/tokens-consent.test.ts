@@ -96,3 +96,28 @@ describe("new error codes", () => {
     expect([e.code, e.retryAfter, e.requestId]).toEqual([code, 2, "req_b"]);
   });
 });
+
+describe("direct sessions", () => {
+  it("creates a direct session", async () => {
+    const SESSION = {
+      session_id: "4f1c2a9e8b7d6c5b4a3f2e1d",
+      url: "wss://gpu.example/v1/stream",
+      protocol: "finesse.v1",
+      token: "ft1.abc",
+      connect_by: "2026-11-09T10:15:00Z",
+      ttl_seconds: 3600,
+      budget_chars: 5000,
+      region: "ap-south",
+      voices: [VOICE.id],
+    };
+    const m = mock(envelope(SESSION, 201));
+    const s = await m.client.realtime.sessions.create({
+      voice_ids: [VOICE.id],
+      budget_chars: 5000,
+    });
+    expect(m.last().method).toBe("POST");
+    expect(m.last().url.pathname).toBe("/flam-voice-svc/api/v1/public/realtime/sessions");
+    expect(m.json()).toEqual({ voice_ids: [VOICE.id], budget_chars: 5000 });
+    expect(s).toEqual(SESSION);
+  });
+});

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.0
+
+- Direct realtime sessions: `realtime.sessions.create({ voice_ids, budget_chars })` and
+  `realtime.connect({ session })` / `{ getSession }` run the socket straight against the
+  synthesis GPU in the account's server region, for lower latency. `RealtimeSession.directSession`
+  reports its region and budget.
+- Realtime: on a direct session, close code `4401` is `RealtimeError` with
+  `code === "unauthorized"` (the token was invalid, already used or past `connect_by`), not
+  `service_auth_failed`. Reusing a spent session throws `session_spent`; one past `connect_by`
+  throws `session_expired` without dialing.
+
 ## 0.1.2
 
 - `output_format: "mulaw"` (raw G.711 µ-law) for telephony, with `sample_rate: 8000`, on

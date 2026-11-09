@@ -19,10 +19,16 @@
  * in the WebSocket subprotocol list (`["finesse.v1", token]`), the one place a browser can put
  * a credential on a handshake. (With a key, browsers and Deno before 2.5 fall back to a
  * deprecated URL parameter, and the SDK logs a warning once.)
+ *
+ * For the lowest latency, run a *direct session*: the socket goes straight to the synthesis GPU
+ * in your account's server region instead of through the API. Create one on your server with
+ * `realtime.sessions.create` and connect with `{ session }` or `{ getSession }`. The messages
+ * and events are the same.
  */
 
-import { API_PREFIX, isBrowser, type Core, type Logger } from "./core.js";
+import { API_PREFIX, Core, isBrowser, type Logger, type RequestOptions } from "./core.js";
 import { APIConnectionError, APITimeoutError, FinesseError, makeStatusError } from "./errors.js";
+import type { DirectSession } from "./types.js";
 
 export const DEFAULT_OPEN_TIMEOUT_MS = 60_000;
 /** The protocol the service selects. A short-lived token travels as a second subprotocol. */
@@ -49,7 +55,8 @@ export class RealtimeError extends FinesseError {
    * voices), `invalid_request` (a parameter out of range), a `task_failed` code. Whole session:
    * `insufficient_credits`, `upstream_unavailable` (the engine could not be reached),
    * `upstream_busy` (it is at capacity), `upstream_error`, `upstream_closed`,
-   * `connection_lost`, `token_spent`, ... */
+   * `connection_lost`, `token_spent`, `session_spent`, `session_expired`, `unauthorized` (a
+   * direct session's token was refused), ... */
   readonly code: string;
   /** The context it applies to, or `null` for the whole session. */
   readonly contextId: string | null;
@@ -76,8 +83,17 @@ export class RealtimeError extends FinesseError {
   }
 }
 
-function closeError(code: number | null, reason: string): RealtimeError | null {
+function closeError(code: number | null, reason: string, direct = false): RealtimeError | null {
   const c = { closeCode: code };
+  // A direct session's GPU closes 4401 when its token is invalid, already used or past
+  // connect_by: a client-side problem, fixed by creating a new session.
+  if (direct && code === 4401) {
+    return new RealtimeError(
+      "unauthorized",
+      "The session token was refused (invalid, already used, or past connect_by). Create a new session.",
+      c,
+    );
+  }
   if (code === 1000) return null;
   if (code === 1008) return new RealtimeError(reason || "policy_violation", reason, c);
   if (code === 1009) return new RealtimeError("message_too_big", "A message was too large.", c);
@@ -205,8 +221,23 @@ export interface ConnectOptions {
   /** Returns a fresh token, e.g. from your own backend running `tokens.create`. Used for the
    * first handshake when there is no `accessToken`, and for every reconnect. */
   getAccessToken?: () => string | Promise<string>;
+  /** A direct session from `realtime.sessions.create`, usually created by your server. Its token
+   * is single use, so pass `getSession` too if the session should reconnect. */
+  session?: DirectSession;
+  /** Returns a new direct session, e.g. `() => client.realtime.sessions.create({ voice_ids })`
+   * on a server, or a call to your own backend in a browser. Used for the first handshake when
+   * there is no `session`, and for every reconnect. */
+  getSession?: () => DirectSession | Promise<DirectSession>;
   /** A WebSocket implementation (defaults to the `ws` package in Node, the global elsewhere). */
   WebSocket?: unknown;
+}
+
+export interface CreateDirectSessionParams {
+  /** The voices the session may use: 1 to 16 of your voices or public platform voices. */
+  voice_ids: string[];
+  /** Characters to reserve, 1-200000 (default 20000). Unused characters are returned when the
+   * session ends. If the balance can't cover it, 1000 are reserved instead. */
+  budget_chars?: number;
 }
 
 const END = Symbol("end");
@@ -459,16 +490,33 @@ export class RealtimeSession {
   private closedWaiters: (() => void)[] = [];
   private readonly staticToken: string | null;
   private tokenSpent = false;
+  private readonly directMode: boolean;
+  private staticSessionSpent = false;
+  private current: DirectSession | null = null;
 
   constructor(
     private readonly core: Core,
     private readonly options: ConnectOptions = {},
   ) {
-    this.staticToken = options.accessToken ?? core.accessToken;
+    this.directMode = Boolean(options.session || options.getSession);
+    if (this.directMode && (options.accessToken || options.getAccessToken)) {
+      throw new FinesseError(
+        "Pass { session } / { getSession } or { accessToken } / { getAccessToken }, not both.",
+      );
+    }
+    this.staticToken = this.directMode ? null : (options.accessToken ?? core.accessToken);
   }
 
+  /** Where the socket connects: the API's `/stream`, or a direct session's GPU URL. */
   get url(): string {
+    if (this.directMode) return this.current?.url ?? this.options.session?.url ?? "";
     return `${this.core.wsBaseURL}${API_PREFIX}/stream`;
+  }
+
+  /** The direct session the socket runs on (its region and budget), or `null` when the session
+   * goes through the API. */
+  get directSession(): DirectSession | null {
+    return this.current;
   }
 
   get isOpen(): boolean {
@@ -619,6 +667,33 @@ export class RealtimeSession {
     return null;
   }
 
+  /** The direct session for the next handshake. Like a token, a static session is used first;
+   * once a handshake has spent it, `getSession` supplies one per reconnect. */
+  private async nextSession(): Promise<DirectSession> {
+    const fixed = this.options.session;
+    if (fixed && !this.staticSessionSpent) {
+      if (Date.parse(fixed.connect_by) <= Date.now()) {
+        throw new RealtimeError(
+          "session_expired",
+          "This direct session's connect_by has passed. Create a new session.",
+        );
+      }
+      return fixed;
+    }
+    if (this.options.getSession) {
+      const s = await this.options.getSession();
+      if (!s || typeof s.url !== "string" || !s.url || typeof s.token !== "string" || !s.token) {
+        throw new FinesseError("getSession must return a session with a url and a token.");
+      }
+      return s;
+    }
+    throw new RealtimeError(
+      "session_spent",
+      "This direct session was used by an earlier connection. Pass { getSession } so a " +
+        "reconnect can create a new one.",
+    );
+  }
+
   private async dial(): Promise<void> {
     const timeout = this.options.openTimeout ?? DEFAULT_OPEN_TIMEOUT_MS;
     const custom = this.options.WebSocket as SocketCtor | undefined;
@@ -631,13 +706,25 @@ export class RealtimeSession {
               : new custom(url, protocols),
         }
       : await defaultDialer();
-    const token = await this.nextToken();
+    const direct = this.directMode ? await this.nextSession() : null;
+    const token = direct ? null : await this.nextToken();
     // Offered only with a token: a server that predates tokens selects no subprotocol, which
     // the `ws` package treats as a failed handshake.
-    const protocols = token ? [SUBPROTOCOL, token] : undefined;
+    let protocols = token ? [SUBPROTOCOL, token] : undefined;
     let url = this.url;
     let headers: Record<string, string> | null = null;
-    if (token) {
+    if (direct) {
+      // Straight to the GPU: the session token rides in the subprotocol list; the API key and
+      // any access token stay off this connection.
+      protocols = [direct.protocol || SUBPROTOCOL, direct.token];
+      url = direct.url;
+      if (dialer.headers) {
+        headers = { ...this.core.headers };
+        delete headers.Accept;
+        delete headers["X-API-Key"];
+        delete headers.Authorization;
+      }
+    } else if (token) {
       // The token replaces the key; it rides in the subprotocol list, never in a header or URL.
       if (dialer.headers) {
         headers = { ...this.core.headers };
@@ -704,6 +791,10 @@ export class RealtimeSession {
       throw new RealtimeError("session_closed", "This session was closed.");
     }
     if (token && token === this.staticToken) this.tokenSpent = true; // the handshake spent it
+    if (direct) {
+      if (direct === this.options.session) this.staticSessionSpent = true;
+      this.current = direct;
+    }
     this.ws = ws;
     this.pendingAudio = null;
     this.fatal = null;
@@ -725,14 +816,15 @@ export class RealtimeSession {
   private onClose(ws: Socket, code: number, reason: string): void {
     if (this.ws !== null && this.ws !== ws) {
       // A replaced socket closed late: end only the contexts that ran on it.
-      const err = closeError(code, reason ?? "") ?? new RealtimeError("connection_closed");
+      const err =
+        closeError(code, reason ?? "", this.directMode) ?? new RealtimeError("connection_closed");
       for (const ctx of [...this.contexts.values()]) if (ctx.socket === ws) ctx._fail(err);
       return;
     }
     this.ws = null;
     let error = this.fatal;
     if (error) error.closeCode ??= code;
-    else error = closeError(code, reason ?? "");
+    else error = closeError(code, reason ?? "", this.directMode);
     if (!error && this.contexts.size) {
       error = new RealtimeError("connection_closed", "The session ended.", { closeCode: code });
     }
@@ -804,9 +896,38 @@ export class RealtimeSession {
   }
 }
 
+/** `client.realtime.sessions`: direct sessions, which run straight against the synthesis GPU. */
+export class DirectSessions {
+  constructor(private readonly core: Core) {}
+
+  /** Create a direct session. Call this on your server with an API key that has the `tts`
+   * scope; it reserves `budget_chars` from your balance now. Connect within 60 s
+   * (`connect_by`), with `realtime.connect({ session })`, or hand `url`, `protocol` and `token`
+   * to a browser:
+   *
+   * ```ts
+   * const session = await client.realtime.sessions.create({ voice_ids: [voiceId] });
+   * const rt = await client.realtime.connect({ session });
+   * ```
+   */
+  async create(
+    params: CreateDirectSessionParams,
+    options: RequestOptions = {},
+  ): Promise<DirectSession> {
+    const json: Record<string, unknown> = { voice_ids: params.voice_ids };
+    if (params.budget_chars !== undefined) json.budget_chars = params.budget_chars;
+    return this.core.json<DirectSession>("POST", "/realtime/sessions", { ...options, json });
+  }
+}
+
 /** `client.realtime`: open realtime sessions. */
 export class Realtime {
-  constructor(private readonly core: Core) {}
+  /** Direct sessions: lower latency, straight to the GPU. */
+  readonly sessions: DirectSessions;
+
+  constructor(private readonly core: Core) {
+    this.sessions = new DirectSessions(core);
+  }
 
   /** Open a session. */
   async connect(options: ConnectOptions = {}): Promise<RealtimeSession> {
@@ -819,6 +940,30 @@ export class Realtime {
   session(options: ConnectOptions = {}): RealtimeSession {
     return new RealtimeSession(this.core, options);
   }
+}
+
+/**
+ * Open a direct session without a client, for a browser or device that holds no API key. Your
+ * server creates the session (`realtime.sessions.create`) and returns it; `getSession` fetches a
+ * new one for each reconnect.
+ *
+ * ```ts
+ * const getSession = async () => (await fetch("/api/finesse-session", { method: "POST" })).json();
+ * const rt = await connectDirect({ getSession });
+ * ```
+ */
+export async function connectDirect(
+  options: Omit<ConnectOptions, "accessToken" | "getAccessToken">,
+): Promise<RealtimeSession> {
+  if (!options.session && !options.getSession) {
+    throw new FinesseError("connectDirect needs { session } or { getSession }.");
+  }
+  // A direct session authenticates with its own token, so this client holds no credential the
+  // socket could use: the placeholder satisfies the constructor and is never sent.
+  const core = new Core({ accessToken: "direct-session-only" });
+  const session = new RealtimeSession(core, options);
+  await session.open();
+  return session;
 }
 
 const warnedLoggers = new WeakSet<Logger>();

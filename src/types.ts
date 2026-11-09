@@ -114,6 +114,28 @@ export interface AccessToken {
   ttl_seconds: number;
 }
 
+/** A direct realtime session from `realtime.sessions.create`: a socket straight to the
+ * synthesis GPU in your account's server region. Pass it to `realtime.connect({ session })`. */
+export interface DirectSession {
+  session_id: string;
+  /** The GPU's WebSocket URL. Connect to it as returned. */
+  url: string;
+  /** The subprotocol to offer first (`finesse.v1`). */
+  protocol: string;
+  /** Single-use `ft1.` token, offered as the second subprotocol. */
+  token: string;
+  /** RFC 3339 time by which the socket must open (60 s after creation). */
+  connect_by: string;
+  /** The longest the session can run once connected. */
+  ttl_seconds: number;
+  /** Characters reserved for the session; it cannot synthesize more. */
+  budget_chars: number;
+  /** GPU region the session runs in: `ap-south` or `us-east`. */
+  region: string;
+  /** The only voices the session can use. */
+  voices: string[];
+}
+
 /** `mulaw` is raw G.711 µ-law for telephony and needs `sample_rate: 8000`. */
 export type OutputFormat = "wav" | "s16le" | "s24le" | "s32le" | "f32le" | "f64le" | "mulaw";
 

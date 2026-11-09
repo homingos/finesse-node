@@ -25,6 +25,7 @@ export {
   RealtimeError,
   RealtimeSession,
   RealtimeContext,
+  connectDirect,
   type RealtimeEvent,
   type UnknownEvent,
   type TaskStarted,
@@ -34,6 +35,7 @@ export {
   type TaskCancelled,
   type ContextOptions,
   type ConnectOptions,
+  type CreateDirectSessionParams,
 } from "./realtime.js";
 export { VoicePage, VoicePagePromise } from "./resources/voices.js";
 export type {
@@ -54,6 +56,7 @@ export type {
   CloneJob,
   CloneResult,
   AccessToken,
+  DirectSession,
   Audio,
   AudioChunk,
   StreamDone,
