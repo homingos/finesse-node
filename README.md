@@ -75,7 +75,7 @@ bun add @flamai/finesse
 ## Get an API key
 
 1. Sign in to the [Finesse dashboard](https://finesse.flamapp.ai/dashboard).
-2. Open **Settings → API keys** and create a key. Copy it right away: it is shown only once,
+2. Open [**Developers → API Keys**](https://finesse.flamapp.ai/dashboard/developers?tab=api-keys) and create a key. Copy it right away: it is shown only once,
    and it starts with `flv_`.
 3. Put it in your environment, where the SDK finds it:
 

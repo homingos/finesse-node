@@ -16,5 +16,5 @@ Fixes go into the latest release. Upgrade to it to get them.
 ## API keys
 
 If you think a Finesse API key has leaked, revoke it in the
-[Finesse dashboard](https://finesse.flamapp.ai/dashboard) under **Settings → API keys** and
+[Finesse dashboard](https://finesse.flamapp.ai/dashboard/developers?tab=api-keys) under **Developers → API Keys** and
 create a new one.
